@@ -7,9 +7,16 @@
 //!   drag (left)   - orbit
 //!   drag (right)  - pan
 //!   scroll        - zoom
+//!   Up / Down     - increase / decrease point retention window
+//!   C             - clear the point buffer
 //!   Esc           - quit
+//!
+//! Points are expired by LiDAR timestamp age, so moving objects stop leaving
+//! trails once they leave a region. The retention window (default 500 ms) is
+//! adjustable at runtime; larger windows build a denser map of static scenes.
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -17,12 +24,67 @@ use glam::{Mat4, Vec3, Vec4};
 use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
 
 use lidar_reader::client::{DataStream, LivoxClient};
-use lidar_reader::packet::{DataPayload, DataPacket};
+use lidar_reader::packet::{DataPacket, DataPayload};
 use lidar_reader::protocol::DataType;
 
 const WIDTH: usize = 1024;
 const HEIGHT: usize = 768;
 const MAX_POINTS: usize = 600_000;
+const DEFAULT_MAX_AGE_MS: f32 = 500.0;
+const AGE_STEP_MS: f32 = 100.0;
+const AGE_MIN_MS: f32 = 50.0;
+const AGE_MAX_MS: f32 = 5000.0;
+
+/// Accumulated point cloud with the latest LiDAR timestamp used for expiry.
+struct Cloud {
+    /// (xyz metres, packet timestamp ns)
+    points: Vec<([f32; 3], u64)>,
+    latest_ts: u64,
+}
+
+impl Cloud {
+    fn new() -> Self {
+        Self {
+            points: Vec::with_capacity(MAX_POINTS),
+            latest_ts: 0,
+        }
+    }
+
+    /// Add a batch of points from one packet and drop those older than the
+    /// retention window. `max_age_ns` is the maximum allowed age in ns.
+    fn add(&mut self, pts: &[lidar_reader::points::Point], ts: u64, max_age_ns: u64) {
+        if ts > self.latest_ts {
+            self.latest_ts = ts;
+        }
+        for p in pts {
+            let (x, y, z) = p.coords_m();
+            self.points.push(([x, y, z], ts));
+        }
+        self.expire(max_age_ns);
+        // Safety cap so a runaway stream never blows up memory.
+        if self.points.len() > MAX_POINTS {
+            let drop = self.points.len() - MAX_POINTS;
+            self.points.drain(..drop);
+        }
+    }
+
+    fn expire(&mut self, max_age_ns: u64) {
+        let cutoff = self.latest_ts.saturating_sub(max_age_ns);
+        // Points are appended in timestamp order, so the old ones are at the
+        // front; drop them in bulk.
+        let mut keep = 0;
+        while keep < self.points.len() && self.points[keep].1 < cutoff {
+            keep += 1;
+        }
+        if keep > 0 {
+            self.points.drain(..keep);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.points.clear();
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -41,13 +103,20 @@ fn main() {
         }
     };
 
-    let points: Arc<Mutex<Vec<[f32; 3]>>> = Arc::new(Mutex::new(Vec::new()));
-    spawn_data_thread(host_ip, lidar_ip, points.clone());
+    let cloud: Arc<Mutex<Cloud>> = Arc::new(Mutex::new(Cloud::new()));
+    let max_age_ms = Arc::new(AtomicU32::new(DEFAULT_MAX_AGE_MS.to_bits()));
 
-    run_window(points);
+    spawn_data_thread(host_ip, lidar_ip, cloud.clone(), max_age_ms.clone());
+
+    run_window(cloud, max_age_ms);
 }
 
-fn spawn_data_thread(host_ip: Ipv4Addr, lidar_ip: Ipv4Addr, points: Arc<Mutex<Vec<[f32; 3]>>>) {
+fn spawn_data_thread(
+    host_ip: Ipv4Addr,
+    lidar_ip: Ipv4Addr,
+    cloud: Arc<Mutex<Cloud>>,
+    max_age_ms: Arc<AtomicU32>,
+) {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
@@ -94,17 +163,13 @@ fn spawn_data_thread(host_ip: Ipv4Addr, lidar_ip: Ipv4Addr, points: Arc<Mutex<Ve
             loop {
                 match stream.next_point_cloud(Duration::from_millis(500)).await {
                     Ok(DataPacket {
+                        header,
                         payload: DataPayload::Points(pts),
-                        ..
                     }) => {
-                        let mut buf = points.lock().unwrap();
-                        for p in pts {
-                            let (x, y, z) = p.coords_m();
-                            buf.push([x, y, z]);
-                        }
-                        if buf.len() > MAX_POINTS {
-                            let drop = buf.len() - MAX_POINTS;
-                            buf.drain(..drop);
+                        let max_age_ns = (f32::from_bits(max_age_ms.load(Ordering::Relaxed))
+                            * 1_000_000.0) as u64;
+                        if let Ok(mut c) = cloud.lock() {
+                            c.add(&pts, header.timestamp, max_age_ns);
                         }
                     }
                     Ok(_) => {}
@@ -135,7 +200,7 @@ impl Camera {
     }
 }
 
-fn run_window(points: Arc<Mutex<Vec<[f32; 3]>>>) {
+fn run_window(cloud: Arc<Mutex<Cloud>>, max_age_ms: Arc<AtomicU32>) {
     let mut buffer = vec![0u32; WIDTH * HEIGHT];
     let mut zbuffer = vec![f32::NEG_INFINITY; WIDTH * HEIGHT];
 
@@ -164,7 +229,7 @@ fn run_window(points: Arc<Mutex<Vec<[f32; 3]>>>) {
     let mut fps = 0.0f32;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        handle_input(&window, &mut cam, &mut prev_mouse);
+        handle_input(&window, &mut cam, &mut prev_mouse, &max_age_ms, &cloud);
 
         let view = Mat4::look_at_rh(cam.eye(), Vec3::from(cam.target), Vec3::Y);
         let proj = Mat4::perspective_rh(1.0, WIDTH as f32 / HEIGHT as f32, 0.05, 1000.0);
@@ -174,13 +239,7 @@ fn run_window(points: Arc<Mutex<Vec<[f32; 3]>>>) {
 
         draw_axes(&mut buffer, &mut zbuffer, view, proj);
 
-        let snapshot = points.lock().unwrap().clone();
-        for p in &snapshot {
-            if let Some((sx, sy, vz)) = project(*p, view, proj) {
-                let color = height_color(p[2]);
-                put_point(&mut buffer, &mut zbuffer, sx, sy, vz, color);
-            }
-        }
+        let count = render_points(&cloud, &mut buffer, &mut zbuffer, view, proj);
 
         window
             .update_with_buffer(&buffer, WIDTH, HEIGHT)
@@ -193,16 +252,46 @@ fn run_window(points: Arc<Mutex<Vec<[f32; 3]>>>) {
             frame_count = 0;
             fps_time = Instant::now();
         }
+        let age = f32::from_bits(max_age_ms.load(Ordering::Relaxed));
         window.set_title(&format!(
-            "Livox MID360 | points: {} | fps: {:.0} | dist: {:.1}m",
-            snapshot.len(),
-            fps,
+            "Livox MID360 | points: {count} | age: {age:.0} ms | fps: {fps:.0} | dist: {:.1} m",
             cam.distance
         ));
     }
 }
 
-fn handle_input(window: &Window, cam: &mut Camera, prev_mouse: &mut Option<(f32, f32)>) {
+/// Render the current point cloud and return how many points were drawn.
+fn render_points(
+    cloud: &Mutex<Cloud>,
+    buffer: &mut [u32],
+    zbuffer: &mut [f32],
+    view: Mat4,
+    proj: Mat4,
+) -> usize {
+    let snapshot: Vec<[f32; 3]> = {
+        let c = match cloud.lock() {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+        c.points.iter().map(|(p, _)| *p).collect()
+    };
+    let mut drawn = 0;
+    for p in &snapshot {
+        if let Some((sx, sy, vz)) = project(*p, view, proj) {
+            put_point(buffer, zbuffer, sx, sy, vz, height_color(p[2]));
+            drawn += 1;
+        }
+    }
+    drawn
+}
+
+fn handle_input(
+    window: &Window,
+    cam: &mut Camera,
+    prev_mouse: &mut Option<(f32, f32)>,
+    max_age_ms: &AtomicU32,
+    cloud: &Mutex<Cloud>,
+) {
     let mouse = window.get_mouse_pos(MouseMode::Pass);
     let (dx, dy) = match (mouse, *prev_mouse) {
         (Some((x, y)), Some((px, py))) => (x - px, y - py),
@@ -228,6 +317,25 @@ fn handle_input(window: &Window, cam: &mut Camera, prev_mouse: &mut Option<(f32,
         cam.distance *= 1.0 - sy * 0.1;
         cam.distance = cam.distance.clamp(0.2, 500.0);
     }
+
+    // Adjust point retention window. Up = longer trails, Down = shorter.
+    if window.is_key_pressed(Key::Up, minifb::KeyRepeat::Yes) {
+        bump_age(max_age_ms, AGE_STEP_MS);
+    }
+    if window.is_key_pressed(Key::Down, minifb::KeyRepeat::Yes) {
+        bump_age(max_age_ms, -AGE_STEP_MS);
+    }
+    if window.is_key_pressed(Key::C, minifb::KeyRepeat::No)
+        && let Ok(mut c) = cloud.lock()
+    {
+        c.clear();
+    }
+}
+
+fn bump_age(max_age_ms: &AtomicU32, delta: f32) {
+    let current = f32::from_bits(max_age_ms.load(Ordering::Relaxed));
+    let next = (current + delta).clamp(AGE_MIN_MS, AGE_MAX_MS);
+    max_age_ms.store(next.to_bits(), Ordering::Relaxed);
 }
 
 fn project(p: [f32; 3], view: Mat4, proj: Mat4) -> Option<(i32, i32, f32)> {
@@ -261,7 +369,15 @@ fn put_point(buffer: &mut [u32], zbuffer: &mut [f32], sx: i32, sy: i32, vz: f32,
     }
 }
 
-fn draw_line(buffer: &mut [u32], zbuffer: &mut [f32], a: [f32; 3], b: [f32; 3], view: Mat4, proj: Mat4, color: u32) {
+fn draw_line(
+    buffer: &mut [u32],
+    zbuffer: &mut [f32],
+    a: [f32; 3],
+    b: [f32; 3],
+    view: Mat4,
+    proj: Mat4,
+    color: u32,
+) {
     let Some((x0, y0, z0)) = project(a, view, proj) else { return };
     let Some((x1, y1, z1)) = project(b, view, proj) else { return };
     let dx = (x1 - x0).abs();
