@@ -230,6 +230,22 @@ impl LivoxClient {
         self.set_parameter(addr, &[(ParameterKey::PclDataType, vec![data_type as u8])], wait)
             .await
     }
+
+    /// Convenience: configure stream destinations, data type, and start sampling.
+    pub async fn start_streaming(
+        &self,
+        addr: SocketAddr,
+        data_dst: SocketAddr,
+        imu_dst: SocketAddr,
+        data_type: DataType,
+        wait: Duration,
+    ) -> Result<()> {
+        self.set_stream_destinations(addr, data_dst, imu_dst, wait).await?;
+        self.set_data_type(addr, data_type, wait).await?;
+        self.set_work_mode(addr, crate::protocol::LidarState::Sampling, wait)
+            .await?;
+        Ok(())
+    }
 }
 
 /// Async receiver for MID360 point-cloud and IMU data streams.

@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use lidar_reader::client::{DataStream, LivoxClient};
-use lidar_reader::protocol::{DataType, LidarState};
+use lidar_reader::protocol::DataType;
 
 #[tokio::main]
 async fn main() {
@@ -14,7 +14,10 @@ async fn main() {
 
     match args[1].as_str() {
         "discover" => {
-            let host_ip = args.get(2).map(|s| parse_ip(s)).unwrap_or(Ipv4Addr::UNSPECIFIED);
+            let host_ip = args
+                .get(2)
+                .map(|s| parse_ip(s))
+                .unwrap_or(Ipv4Addr::UNSPECIFIED);
             run_discovery(host_ip).await;
         }
         "stream" => {
@@ -95,7 +98,9 @@ async fn run_discovery(host_ip: Ipv4Addr) {
 
 async fn run_stream(host_ip: Ipv4Addr, lidar_ip: Ipv4Addr) {
     if host_ip.is_unspecified() {
-        eprintln!("stream requires a specific host_ip (0.0.0.0 is not valid here); use the IP of the interface connected to the LiDAR");
+        eprintln!(
+            "stream requires a specific host_ip (0.0.0.0 is not valid here); use the IP of the interface connected to the LiDAR"
+        );
         return;
     }
 
@@ -120,26 +125,16 @@ async fn run_stream(host_ip: Ipv4Addr, lidar_ip: Ipv4Addr) {
 
     println!("Configuring LiDAR at {lidar_cmd_addr} to stream to {data_dst} / {imu_dst}");
     if let Err(e) = client
-        .set_stream_destinations(lidar_cmd_addr, data_dst, imu_dst, Duration::from_secs(2))
+        .start_streaming(
+            lidar_cmd_addr,
+            data_dst,
+            imu_dst,
+            DataType::PointCloudCartesian32,
+            Duration::from_secs(2),
+        )
         .await
     {
-        eprintln!("Failed to configure stream destinations: {e}");
-        return;
-    }
-
-    if let Err(e) = client
-        .set_data_type(lidar_cmd_addr, DataType::PointCloudCartesian32, Duration::from_secs(2))
-        .await
-    {
-        eprintln!("Failed to set data type: {e}");
-        return;
-    }
-
-    if let Err(e) = client
-        .set_work_mode(lidar_cmd_addr, LidarState::Sampling, Duration::from_secs(2))
-        .await
-    {
-        eprintln!("Failed to set work mode: {e}");
+        eprintln!("Failed to start streaming: {e}");
         return;
     }
 
@@ -149,11 +144,10 @@ async fn run_stream(host_ip: Ipv4Addr, lidar_ip: Ipv4Addr) {
             result = stream.next_point_cloud(Duration::from_secs(1)) => {
                 match result {
                     Ok(packet) => {
-                        let header = &packet.header;
                         if let lidar_reader::packet::DataPayload::Points(points) = &packet.payload {
-                            println!(
-                                "frame={} udp={} time={} ns points={}",
-                                header.frame_cnt, header.udp_cnt, header.timestamp, points.len()
+                            print!(
+                                "\rpoint cloud: udp={} ts={} ns points={}",
+                                packet.header.udp_cnt, packet.header.timestamp, points.len()
                             );
                         }
                     }
@@ -165,8 +159,8 @@ async fn run_stream(host_ip: Ipv4Addr, lidar_ip: Ipv4Addr) {
                 match result {
                     Ok(packet) => {
                         if let lidar_reader::packet::DataPayload::Imu(imu) = &packet.payload {
-                            println!(
-                                "IMU gyro=({:.3},{:.3},{:.3}) acc=({:.3},{:.3},{:.3})",
+                            print!(
+                                "\rIMU gyro=({:.3},{:.3},{:.3}) acc=({:.3},{:.3},{:.3})",
                                 imu.gyro_x, imu.gyro_y, imu.gyro_z,
                                 imu.acc_x, imu.acc_y, imu.acc_z
                             );
