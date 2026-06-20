@@ -14,6 +14,11 @@
 //! Points are expired by LiDAR timestamp age, so moving objects stop leaving
 //! trails once they leave a region. The retention window (default 500 ms) is
 //! adjustable at runtime; larger windows build a denser map of static scenes.
+//!
+//! Coordinate convention: the LiDAR frame is (x, y, z) with Z as height. The
+//! viewer remaps each point to world (x, z, -y) so that Z is drawn upward and
+//! positive LiDAR Y points the correct way (the sensor frame is left-handed
+//! relative to the viewer's right-handed one).
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -37,7 +42,8 @@ const AGE_MAX_MS: f32 = 5000.0;
 
 /// Accumulated point cloud with the latest LiDAR timestamp used for expiry.
 struct Cloud {
-    /// (xyz metres, packet timestamp ns)
+    /// (world metres, packet timestamp ns). World = (lx, lz, ly) so the LiDAR
+    /// Z (height) becomes the vertical axis in the viewer.
     points: Vec<([f32; 3], u64)>,
     latest_ts: u64,
 }
@@ -58,7 +64,10 @@ impl Cloud {
         }
         for p in pts {
             let (x, y, z) = p.coords_m();
-            self.points.push(([x, y, z], ts));
+            // Remap LiDAR (x, y, z) -> viewer world (x, z, -y): Z up, and
+            // negate LiDAR Y so positive Y points the correct way (the sensor
+            // frame is left-handed relative to the viewer's right-handed one).
+            self.points.push(([x, z, -y], ts));
         }
         self.expire(max_age_ns);
         // Safety cap so a runaway stream never blows up memory.
@@ -278,7 +287,7 @@ fn render_points(
     let mut drawn = 0;
     for p in &snapshot {
         if let Some((sx, sy, vz)) = project(*p, view, proj) {
-            put_point(buffer, zbuffer, sx, sy, vz, height_color(p[2]));
+            put_point(buffer, zbuffer, sx, sy, vz, height_color(p[1]));
             drawn += 1;
         }
     }
