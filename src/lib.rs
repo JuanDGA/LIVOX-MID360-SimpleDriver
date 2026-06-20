@@ -5,6 +5,8 @@ pub mod error;
 pub mod packet;
 pub mod points;
 pub mod protocol;
+#[cfg(feature = "viewer")]
+pub mod imu;
 
 pub use client::{DataStream, DiscoveredDevice, LivoxClient};
 pub use command::CommandFrame;

@@ -19,16 +19,23 @@
 //! viewer remaps each point to world (x, z, -y) so that Z is drawn upward and
 //! positive LiDAR Y points the correct way (the sensor frame is left-handed
 //! relative to the viewer's right-handed one).
+//!
+//! IMU stabilization: each point is rotated by the LiDAR's estimated attitude
+//! (body -> gravity-aligned world frame) before display, so rotating the
+//! sensor does not rotate the view. Only orientation is corrected; walking
+//! the LiDAR sideways will still translate the cloud (an IMU cannot recover
+//! position).
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
 
 use lidar_reader::client::{DataStream, LivoxClient};
+use lidar_reader::imu::{AttitudeEstimator, OrientationHistory};
 use lidar_reader::packet::{DataPacket, DataPayload};
 use lidar_reader::protocol::DataType;
 
@@ -39,11 +46,13 @@ const DEFAULT_MAX_AGE_MS: f32 = 500.0;
 const AGE_STEP_MS: f32 = 100.0;
 const AGE_MIN_MS: f32 = 50.0;
 const AGE_MAX_MS: f32 = 5000.0;
+/// IMU orientation history length (~4 s at 200 Hz) covers point-packet latency.
+const ORIENTATION_HISTORY_LEN: usize = 800;
 
 /// Accumulated point cloud with the latest LiDAR timestamp used for expiry.
 struct Cloud {
-    /// (world metres, packet timestamp ns). World = (lx, lz, ly) so the LiDAR
-    /// Z (height) becomes the vertical axis in the viewer.
+    /// (world metres, packet timestamp ns). World = (x, z, -y) after attitude
+    /// rotation, so the LiDAR Z (height) becomes the vertical viewer axis.
     points: Vec<([f32; 3], u64)>,
     latest_ts: u64,
 }
@@ -56,18 +65,25 @@ impl Cloud {
         }
     }
 
-    /// Add a batch of points from one packet and drop those older than the
-    /// retention window. `max_age_ns` is the maximum allowed age in ns.
-    fn add(&mut self, pts: &[lidar_reader::points::Point], ts: u64, max_age_ns: u64) {
+    /// Add a batch of points from one packet, rotated by the attitude `q`
+    /// (body -> world) estimated at the packet timestamp, then drop points
+    /// older than the retention window. `max_age_ns` is the max age in ns.
+    fn add(
+        &mut self,
+        pts: &[lidar_reader::points::Point],
+        ts: u64,
+        max_age_ns: u64,
+        q: Quat,
+    ) {
         if ts > self.latest_ts {
             self.latest_ts = ts;
         }
         for p in pts {
             let (x, y, z) = p.coords_m();
-            // Remap LiDAR (x, y, z) -> viewer world (x, z, -y): Z up, and
-            // negate LiDAR Y so positive Y points the correct way (the sensor
-            // frame is left-handed relative to the viewer's right-handed one).
-            self.points.push(([x, z, -y], ts));
+            // Stabilize: body -> gravity-aligned world frame.
+            let pw = q * Vec3::new(x, y, z);
+            // Remap to viewer world (x, z, -y): Z up, +LiDAR-Y corrected.
+            self.points.push(([pw.x, pw.z, -pw.y], ts));
         }
         self.expire(max_age_ns);
         // Safety cap so a runaway stream never blows up memory.
@@ -169,21 +185,37 @@ fn spawn_data_thread(
             }
             println!("LiDAR streaming; close the window or press Esc to quit.");
 
+            let mut estimator = AttitudeEstimator::new();
+            let mut history = OrientationHistory::new(ORIENTATION_HISTORY_LEN);
+
             loop {
-                match stream.next_point_cloud(Duration::from_millis(500)).await {
-                    Ok(DataPacket {
-                        header,
-                        payload: DataPayload::Points(pts),
-                    }) => {
-                        let max_age_ns = (f32::from_bits(max_age_ms.load(Ordering::Relaxed))
-                            * 1_000_000.0) as u64;
-                        if let Ok(mut c) = cloud.lock() {
-                            c.add(&pts, header.timestamp, max_age_ns);
+                tokio::select! {
+                    pkt = stream.next_imu(Duration::from_millis(200)) => {
+                        if let Ok(DataPacket {
+                            header,
+                            payload: DataPayload::Imu(imu),
+                        }) = pkt
+                        {
+                            let gyro = Vec3::new(imu.gyro_x, imu.gyro_y, imu.gyro_z);
+                            let acc = Vec3::new(imu.acc_x, imu.acc_y, imu.acc_z);
+                            estimator.update(gyro, acc, header.timestamp);
+                            history.push(header.timestamp, estimator.q);
                         }
                     }
-                    Ok(_) => {}
-                    Err(lidar_reader::LidarError::NoResponse { .. }) => {}
-                    Err(e) => eprintln!("data error: {e}"),
+                    pkt = stream.next_point_cloud(Duration::from_millis(200)) => {
+                        if let Ok(DataPacket {
+                            header,
+                            payload: DataPayload::Points(pts),
+                        }) = pkt
+                        {
+                            let q = history.at(header.timestamp);
+                            let max_age_ns = (f32::from_bits(max_age_ms.load(Ordering::Relaxed))
+                                * 1_000_000.0) as u64;
+                            if let Ok(mut c) = cloud.lock() {
+                                c.add(&pts, header.timestamp, max_age_ns, q);
+                            }
+                        }
+                    }
                 }
             }
         });

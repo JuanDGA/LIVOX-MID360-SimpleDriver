@@ -231,6 +231,21 @@ impl LivoxClient {
             .await
     }
 
+    /// Enable or disable the LiDAR pushing IMU data.
+    pub async fn set_imu_enabled(
+        &self,
+        addr: SocketAddr,
+        enabled: bool,
+        wait: Duration,
+    ) -> Result<()> {
+        self.set_parameter(
+            addr,
+            &[(ParameterKey::ImuDataEn, vec![u8::from(enabled)])],
+            wait,
+        )
+        .await
+    }
+
     /// Convenience: configure stream destinations, data type, and start sampling.
     pub async fn start_streaming(
         &self,
@@ -242,6 +257,7 @@ impl LivoxClient {
     ) -> Result<()> {
         self.set_stream_destinations(addr, data_dst, imu_dst, wait).await?;
         self.set_data_type(addr, data_type, wait).await?;
+        self.set_imu_enabled(addr, true, wait).await?;
         self.set_work_mode(addr, crate::protocol::LidarState::Sampling, wait)
             .await?;
         Ok(())
