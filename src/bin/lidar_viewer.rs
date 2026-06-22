@@ -9,11 +9,18 @@
 //!   scroll        - zoom
 //!   Up / Down     - increase / decrease point retention window
 //!   C             - clear the point buffer
+//!   F             - toggle FOV clip (hide points outside the LiDAR's current view)
 //!   Esc           - quit
 //!
 //! Points are expired by LiDAR timestamp age, so moving objects stop leaving
 //! trails once they leave a region. The retention window (default 500 ms) is
 //! adjustable at runtime; larger windows build a denser map of static scenes.
+//!
+//! FOV clip (off by default): the MID360 scans 360 deg about Z and covers
+//! elevation -7 deg to +59 deg from the horizontal plane. When enabled, only
+//! points the LiDAR could currently see (i.e. inside that cone in the body
+//! frame, using the latest attitude) are drawn; the rest stay in the buffer
+//! and reappear when the sensor turns back toward them.
 //!
 //! Coordinate convention: the LiDAR frame is (x, y, z) with Z as height. The
 //! viewer remaps each point to world (x, z, -y) so that Z is drawn upward and
@@ -27,7 +34,7 @@
 //! position).
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -48,6 +55,14 @@ const AGE_MIN_MS: f32 = 50.0;
 const AGE_MAX_MS: f32 = 5000.0;
 /// IMU orientation history length (~4 s at 200 Hz) covers point-packet latency.
 const ORIENTATION_HISTORY_LEN: usize = 800;
+
+/// LiDAR field of view, measured in the body frame. The MID360 scans a full
+/// 360 deg about Z (azimuth unconstrained) and elevations from -7 deg to
+/// +59 deg measured from the horizontal (XY) plane toward +/- Z. Used by the
+/// optional FOV clip; off by default so points the LiDAR can no longer see
+/// remain on screen as a persistent map.
+const FOV_ELEV_MIN_RAD: f32 = -7.0 * std::f32::consts::PI / 180.0;
+const FOV_ELEV_MAX_RAD: f32 = 59.0 * std::f32::consts::PI / 180.0;
 
 /// Accumulated point cloud with the latest LiDAR timestamp used for expiry.
 struct Cloud {
@@ -130,10 +145,12 @@ fn main() {
 
     let cloud: Arc<Mutex<Cloud>> = Arc::new(Mutex::new(Cloud::new()));
     let max_age_ms = Arc::new(AtomicU32::new(DEFAULT_MAX_AGE_MS.to_bits()));
+    let latest_q: Arc<Mutex<Quat>> = Arc::new(Mutex::new(Quat::IDENTITY));
+    let fov_clip = Arc::new(AtomicBool::new(false));
 
-    spawn_data_thread(host_ip, lidar_ip, cloud.clone(), max_age_ms.clone());
+    spawn_data_thread(host_ip, lidar_ip, cloud.clone(), max_age_ms.clone(), latest_q.clone());
 
-    run_window(cloud, max_age_ms);
+    run_window(cloud, max_age_ms, latest_q, fov_clip);
 }
 
 fn spawn_data_thread(
@@ -141,6 +158,7 @@ fn spawn_data_thread(
     lidar_ip: Ipv4Addr,
     cloud: Arc<Mutex<Cloud>>,
     max_age_ms: Arc<AtomicU32>,
+    latest_q: Arc<Mutex<Quat>>,
 ) {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -200,6 +218,9 @@ fn spawn_data_thread(
                             let acc = Vec3::new(imu.acc_x, imu.acc_y, imu.acc_z);
                             estimator.update(gyro, acc, header.timestamp);
                             history.push(header.timestamp, estimator.q);
+                            if let Ok(mut q) = latest_q.lock() {
+                                *q = estimator.q;
+                            }
                         }
                     }
                     pkt = stream.next_point_cloud(Duration::from_millis(200)) => {
@@ -241,7 +262,12 @@ impl Camera {
     }
 }
 
-fn run_window(cloud: Arc<Mutex<Cloud>>, max_age_ms: Arc<AtomicU32>) {
+fn run_window(
+    cloud: Arc<Mutex<Cloud>>,
+    max_age_ms: Arc<AtomicU32>,
+    latest_q: Arc<Mutex<Quat>>,
+    fov_clip: Arc<AtomicBool>,
+) {
     let mut buffer = vec![0u32; WIDTH * HEIGHT];
     let mut zbuffer = vec![f32::NEG_INFINITY; WIDTH * HEIGHT];
 
@@ -270,7 +296,7 @@ fn run_window(cloud: Arc<Mutex<Cloud>>, max_age_ms: Arc<AtomicU32>) {
     let mut fps = 0.0f32;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        handle_input(&window, &mut cam, &mut prev_mouse, &max_age_ms, &cloud);
+        handle_input(&window, &mut cam, &mut prev_mouse, &max_age_ms, &cloud, &fov_clip);
 
         let view = Mat4::look_at_rh(cam.eye(), Vec3::from(cam.target), Vec3::Y);
         let proj = Mat4::perspective_rh(1.0, WIDTH as f32 / HEIGHT as f32, 0.05, 1000.0);
@@ -280,7 +306,9 @@ fn run_window(cloud: Arc<Mutex<Cloud>>, max_age_ms: Arc<AtomicU32>) {
 
         draw_axes(&mut buffer, &mut zbuffer, view, proj);
 
-        let count = render_points(&cloud, &mut buffer, &mut zbuffer, view, proj);
+        let q_current = latest_q.lock().map(|q| *q).unwrap_or(Quat::IDENTITY);
+        let clip = fov_clip.load(Ordering::Relaxed);
+        let count = render_points(&cloud, &mut buffer, &mut zbuffer, view, proj, q_current, clip);
 
         window
             .update_with_buffer(&buffer, WIDTH, HEIGHT)
@@ -294,20 +322,25 @@ fn run_window(cloud: Arc<Mutex<Cloud>>, max_age_ms: Arc<AtomicU32>) {
             fps_time = Instant::now();
         }
         let age = f32::from_bits(max_age_ms.load(Ordering::Relaxed));
+        let fov = if clip { "on" } else { "off" };
         window.set_title(&format!(
-            "Livox MID360 | points: {count} | age: {age:.0} ms | fps: {fps:.0} | dist: {:.1} m",
+            "Livox MID360 | points: {count} | age: {age:.0} ms | fov: {fov} | fps: {fps:.0} | dist: {:.1} m",
             cam.distance
         ));
     }
 }
 
 /// Render the current point cloud and return how many points were drawn.
+/// When `fov_clip` is set, points outside the LiDAR's current FOV cone (in
+/// the body frame, using the latest attitude `q_current`) are skipped.
 fn render_points(
     cloud: &Mutex<Cloud>,
     buffer: &mut [u32],
     zbuffer: &mut [f32],
     view: Mat4,
     proj: Mat4,
+    q_current: Quat,
+    fov_clip: bool,
 ) -> usize {
     let snapshot: Vec<[f32; 3]> = {
         let c = match cloud.lock() {
@@ -316,8 +349,12 @@ fn render_points(
         };
         c.points.iter().map(|(p, _)| *p).collect()
     };
+    let inv_q = q_current.conjugate();
     let mut drawn = 0;
     for p in &snapshot {
+        if fov_clip && !in_fov(*p, inv_q) {
+            continue;
+        }
         if let Some((sx, sy, vz)) = project(*p, view, proj) {
             put_point(buffer, zbuffer, sx, sy, vz, height_color(p[1]));
             drawn += 1;
@@ -326,12 +363,30 @@ fn render_points(
     drawn
 }
 
+/// Whether a stored viewer-world point lies inside the LiDAR's current FOV.
+///
+/// Stored points are in viewer world `(x, z, -y)` (see `Cloud::add`); we first
+/// undo that remap to recover the gravity-aligned world vector, then rotate
+/// world -> body with `inv_q` (the inverse of the current body -> world
+/// attitude). The FOV cone is defined in the body frame: 360 deg about Z, so
+/// azimuth is unconstrained, and elevation must lie within
+/// `[-FOV_ELEV_MIN_RAD, FOV_ELEV_MAX_RAD]` measured from the horizontal plane.
+fn in_fov(stored: [f32; 3], inv_q: Quat) -> bool {
+    // Undo viewer remap (x, z, -y) -> world (x, y, z).
+    let pw = Vec3::new(stored[0], -stored[2], stored[1]);
+    let body = inv_q * pw;
+    let horiz = (body.x * body.x + body.y * body.y).sqrt();
+    let elev = body.z.atan2(horiz);
+    elev >= FOV_ELEV_MIN_RAD && elev <= FOV_ELEV_MAX_RAD
+}
+
 fn handle_input(
     window: &Window,
     cam: &mut Camera,
     prev_mouse: &mut Option<(f32, f32)>,
     max_age_ms: &AtomicU32,
     cloud: &Mutex<Cloud>,
+    fov_clip: &AtomicBool,
 ) {
     let mouse = window.get_mouse_pos(MouseMode::Pass);
     let (dx, dy) = match (mouse, *prev_mouse) {
@@ -370,6 +425,10 @@ fn handle_input(
         && let Ok(mut c) = cloud.lock()
     {
         c.clear();
+    }
+    if window.is_key_pressed(Key::F, minifb::KeyRepeat::No) {
+        let cur = fov_clip.load(Ordering::Relaxed);
+        fov_clip.store(!cur, Ordering::Relaxed);
     }
 }
 
@@ -469,5 +528,64 @@ fn gradient(t: f32) -> (u8, u8, u8) {
             let k = v - 3.0;
             (255, (255.0 - k * 255.0) as u8, 0)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Convert a body-frame direction to the stored viewer-world form the
+    /// renderer uses: world = q * body, then stored = (world.x, world.z, -world.y).
+    fn stored_from_body(body: Vec3, q: Quat) -> [f32; 3] {
+        let w = q * body;
+        [w.x, w.z, -w.y]
+    }
+
+    #[test]
+    fn fov_keeps_in_cone_with_identity_attitude() {
+        let q = Quat::IDENTITY;
+        // Horizontal point: elevation 0 deg -> inside [-7, 59].
+        assert!(in_fov(stored_from_body(Vec3::new(5.0, 0.0, 0.0), q), q));
+        // +45 deg elevation -> inside.
+        let z = 45.0_f32.to_radians().tan() * 5.0;
+        assert!(in_fov(stored_from_body(Vec3::new(5.0, 0.0, z), q), q));
+        // Any azimuth at elevation 0 is inside (360 deg about Z).
+        assert!(in_fov(stored_from_body(Vec3::new(0.0, -3.0, 0.0), q), q));
+        assert!(in_fov(stored_from_body(Vec3::new(-2.0, 4.0, 0.0), q), q));
+    }
+
+    #[test]
+    fn fov_drops_too_high_and_too_low() {
+        let q = Quat::IDENTITY;
+        // +80 deg elevation: above the +59 deg ceiling -> outside.
+        let z = 80.0_f32.to_radians().tan() * 5.0;
+        assert!(!in_fov(stored_from_body(Vec3::new(5.0, 0.0, z), q), q));
+        // -20 deg elevation: below the -7 deg floor -> outside.
+        let z = -20.0_f32.to_radians().tan() * 5.0;
+        assert!(!in_fov(stored_from_body(Vec3::new(5.0, 0.0, z), q), q));
+    }
+
+    #[test]
+    fn fov_boundary_is_inclusive() {
+        let q = Quat::IDENTITY;
+        // Exactly +59 deg and -7 deg should be kept (inclusive bounds).
+        let up_z = 59.0_f32.to_radians().tan() * 5.0;
+        assert!(in_fov(stored_from_body(Vec3::new(5.0, 0.0, up_z), q), q));
+        let down_z = -7.0_f32.to_radians().tan() * 5.0;
+        assert!(in_fov(stored_from_body(Vec3::new(5.0, 0.0, down_z), q), q));
+    }
+
+    #[test]
+    fn fov_uses_current_attitude_not_capture_time() {
+        // LiDAR now points such that world +X lies along its body +Z (straight
+        // up): a world-horizontal point is seen at +90 deg elevation in the
+        // body frame, above the +59 deg ceiling, so it is clipped.
+        let q_now = Quat::from_rotation_y(90.0_f32.to_radians());
+        let inv_q = q_now.conjugate().normalize();
+        let stored = [5.0, 0.0, 0.0]; // world (5, 0, 0)
+        assert!(!in_fov(stored, inv_q));
+        // With no rotation the same point is in-FOV.
+        assert!(in_fov(stored, Quat::IDENTITY));
     }
 }
