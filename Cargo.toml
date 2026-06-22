@@ -2,6 +2,8 @@
 name = "lidar_reader"
 version = "0.1.0"
 edition = "2024"
+authors = ["Juan David Guevara Arévalo <soyjuandavidguevara@gmail.com>"]
+license = "Apache-2.0"
 
 [features]
 default = []
