@@ -1,17 +1,13 @@
-use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 
 use lidar_reader::client::LivoxClient;
-use lidar_reader::packet::DataPacket;
-use lidar_reader::points::Point;
 use lidar_reader::recorder::CsvRecorder;
 
 #[derive(Parser, Debug)]
@@ -68,12 +64,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::spawn(handle_connection(stream, tx));
         }
     });
-    
+
     println!("Starting Lidar {} mode", args.action);
     
-    let mut client = LivoxClient::new(host_ip)?;
-    client.connect(lidar_ip)?;
-    let mut stream = client.start_stream()?;
+    let command_client = match LivoxClient::with_default_cmd_port(host_ip).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to bind command socket to {}: {}", host_ip, e);
+            return Ok(());
+        }
+    };
+    
+    let stream = match lidar_reader::client::DataStream::with_default_ports(host_ip).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to bind data/imu sockets to {}: {}", host_ip, e);
+            return Ok(());
+        }
+    };
+
+    let lidar_cmd_addr = std::net::SocketAddr::from((lidar_ip, lidar_reader::protocol::CMD_PORT));
+    let data_dst = std::net::SocketAddr::from((host_ip, lidar_reader::protocol::HOST_DATA_PORT));
+    let imu_dst = std::net::SocketAddr::from((host_ip, lidar_reader::protocol::HOST_IMU_PORT));
+
+    if let Err(e) = command_client
+        .start_streaming(
+            lidar_cmd_addr,
+            data_dst,
+            imu_dst,
+            lidar_reader::protocol::DataType::PointCloudCartesian32,
+            Duration::from_secs(2),
+        )
+        .await
+    {
+        eprintln!("Failed to start streaming: {}", e);
+        return Ok(());
+    }
 
     let mut recorder = if is_recording {
         println!("Recording to directory: {}", args.dir);
@@ -90,42 +116,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let buffer_threshold = 3000;
         
     loop {
-        // This blocks, but the UDP receive logic in LIVOX-MID360-SimpleDriver is sync
-        // Using it inside main loop of tokio is okay if we yield occasionally, 
-        // but it's better to just do standard recv.
-        // For simplicity and since stream is sync, we do it in a blocking task or block the main thread.
-        // It's perfectly fine to block main thread and do websockets in spawned tasks
-        if let Ok(data) = stream.recv(Duration::from_millis(100)) {
-            match data {
-                lidar_reader::client::DataStream::PointCloud(packet) => {
-                    let pts = packet.payload.points();
-                    
-                    if let Some(rec) = &mut recorder {
-                        rec.write_points(&packet.header, pts)?;
-                    }
-                    
-                    if !is_recording {
-                        // Gather points for live view
-                        for p in pts {
-                            let (x, y, z) = p.coords_m();
-                            point_buffer.push(x);
-                            point_buffer.push(y);
-                            point_buffer.push(z);
-                        }
-                        
-                        if point_buffer.len() >= buffer_threshold * 3 {
-                            let bytes: &[u8] = bytemuck::cast_slice(&point_buffer);
-                            let _ = tx.send(bytes.to_vec());
-                            point_buffer.clear();
-                        }
-                    }
-                }
-                lidar_reader::client::DataStream::Imu(header, imu) => {
-                    if let Some(rec) = &mut recorder {
-                        rec.write_imu(&header, &imu)?;
-                    }
-                }
-            }
+        tokio::select! {
+             result = stream.next_point_cloud(Duration::from_secs(1)) => {
+                 match result {
+                     Ok(packet) => {
+                         if let lidar_reader::packet::DataPayload::Points(pts) = &packet.payload {
+                             if let Some(rec) = &mut recorder {
+                                 rec.write_points(&packet.header, pts)?;
+                             }
+                             
+                             if !is_recording {
+                                 // Gather points for live view
+                                 for p in pts {
+                                     let (x, y, z) = p.coords_m();
+                                     point_buffer.push(x);
+                                     point_buffer.push(y);
+                                     point_buffer.push(z);
+                                 }
+                                 
+                                 if point_buffer.len() >= buffer_threshold * 3 {
+                                     let bytes: &[u8] = bytemuck::cast_slice(&point_buffer);
+                                     let _ = tx.send(bytes.to_vec());
+                                     point_buffer.clear();
+                                 }
+                             }
+                         }
+                     }
+                     Err(lidar_reader::LidarError::NoResponse { .. }) => {}
+                     Err(e) => eprintln!("point cloud error: {e}"),
+                 }
+             }
+             result = stream.next_imu(Duration::from_secs(1)) => {
+                  match result {
+                     Ok(packet) => {
+                         if let lidar_reader::packet::DataPayload::Imu(imu) = &packet.payload {
+                              if let Some(rec) = &mut recorder {
+                                  rec.write_imu(&packet.header, &imu)?;
+                              }
+                         }
+                     }
+                     Err(lidar_reader::LidarError::NoResponse { .. }) => {}
+                     Err(e) => eprintln!("imu error: {e}"),
+                 }
+             }
         }
     }
 }
