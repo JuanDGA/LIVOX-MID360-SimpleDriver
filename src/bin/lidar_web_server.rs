@@ -125,20 +125,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                  rec.write_points(&packet.header, pts)?;
                              }
                              
-                             if !is_recording {
-                                 // Gather points for live view
-                                 for p in pts {
-                                     let (x, y, z) = p.coords_m();
-                                     point_buffer.push(x);
-                                     point_buffer.push(y);
-                                     point_buffer.push(z);
-                                 }
-                                 
-                                 if point_buffer.len() >= buffer_threshold * 3 {
-                                     let bytes: &[u8] = bytemuck::cast_slice(&point_buffer);
-                                     let _ = tx.send(bytes.to_vec());
-                                     point_buffer.clear();
-                                 }
+                             // Gather points for live view (even when recording)
+                             for p in pts {
+                                 let (x, y, z) = p.coords_m();
+                                 point_buffer.push(x);
+                                 point_buffer.push(y);
+                                 point_buffer.push(z);
+                             }
+                             
+                             if point_buffer.len() >= buffer_threshold * 3 {
+                                 let bytes: &[u8] = bytemuck::cast_slice(&point_buffer);
+                                 let _ = tx.send(bytes.to_vec());
+                                 point_buffer.clear();
                              }
                          }
                      }
