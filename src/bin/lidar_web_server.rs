@@ -48,7 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lidar_ip: Ipv4Addr = args.lidar_ip.parse()?;
     
     // Channel for broadcasting coordinate bounds to ws clients
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(16);
+    // Increased bounds from 16 to 128 to buffer more frames for slower wifi clients (smartphones)
+    let (tx, _rx) = broadcast::channel::<Vec<u8>>(128);
 
     let tx_clone = tx.clone();
     
@@ -171,9 +172,21 @@ async fn handle_connection(stream: TcpStream, tx: broadcast::Sender<Vec<u8>>) {
 
     println!("New WebSocket connection established");
 
-    while let Ok(msg) = rx.recv().await {
-        if sender.send(Message::Binary(msg.into())).await.is_err() {
-            break;
+    loop {
+        match rx.recv().await {
+            Ok(msg) => {
+                if sender.send(Message::Binary(msg.into())).await.is_err() {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                // Client is slow, dropped some frames. Continue without disconnecting.
+                continue;
+            }
+            Err(_) => {
+                // Channel closed
+                break;
+            }
         }
     }
     
