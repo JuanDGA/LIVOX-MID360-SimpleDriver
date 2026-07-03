@@ -151,15 +151,24 @@ that point. See [Recorded CSV format](#recorded-csv-format) for the schema.
 
 ## The `lidar_viewer` binary
 
-A live 3D point-cloud window. Build and run with the `viewer` feature:
+A 3D point-cloud window with two modes: **live** (stream from a sensor) and
+**replay** (load recorded CSVs). Build and run with the `viewer` feature:
 
 ```sh
-cargo run --features viewer --bin lidar_viewer -- 192.168.1.50 192.168.1.100
+# Live from a MID360:
+cargo run --features viewer --bin lidar_viewer -- live 192.168.1.50 192.168.1.100
+
+# Replay CSVs produced by `lidar_reader record` (IMU is optional):
+cargo run --features viewer --bin lidar_viewer -- replay ./capture_001/points.csv ./capture_001/imu.csv
 ```
 
-Points accumulate over a short retention window and are color-coded by
-height. The view is stabilized by the IMU (see below), so rotating the
-sensor does not rotate the scene.
+The legacy form `lidar_viewer <host_ip> <lidar_ip>` (no `live` keyword) is
+still accepted and runs live mode.
+
+Points accumulate over a retention window and are color-coded by height.
+In live mode the view is stabilized by the IMU (see below); in replay mode
+the recorded IMU is fed back through the same attitude estimator so the
+playback is stabilized exactly as it was captured.
 
 ### Controls
 
@@ -168,13 +177,21 @@ sensor does not rotate the scene.
 - **Scroll** -- zoom (change distance).
 - **Up / Down** -- increase / decrease the point retention window
   (how long old points stay on screen). Default 500 ms; larger values build
-  a denser map of static scenes.
+  a denser map of static scenes. (Live mode; in replay the window still
+  applies when the FOV clip is off.)
 - **C** -- clear the point buffer.
 - **F** -- toggle the optional [FOV clip](#optional-fov-clip).
 - **Esc** -- quit.
 
-The window title shows the current point count, retention age, FOV-clip
-state, FPS, and camera distance.
+Replay-only controls:
+
+- **Space** -- play / pause.
+- **R** -- restart from the beginning (also clears the buffer).
+- **Z** / **X** -- slow down / speed up playback (0.1x to 20x).
+
+The window title shows the mode, point count, retention age, FOV-clip
+state, FPS, and camera distance; in replay it also shows elapsed/total
+time, play/pause state, and speed.
 
 ### IMU stabilization
 
@@ -185,22 +202,57 @@ an IMU cannot recover position, so walking the LiDAR sideways will still
 translate the cloud. The filter is in `src/imu.rs` and only compiled with
 the `viewer` feature.
 
+### Replay mode
+
+`replay` loads the CSVs written by `lidar_reader record` and plays them
+back through the same render, stabilization, and FOV-clip pipeline as live
+mode. The recorded IMU is fed back through the attitude estimator, so the
+playback is stabilized exactly as the capture was -- including the live/
+persisted FOV-clip split, which works from the replayed IMU attitude.
+
+- `points.csv` is required; `imu.csv` is optional (omit it only if you did
+  not record IMU, in which case the playback is shown in the body frame
+  with no stabilization).
+- Playback runs in real time scaled by speed (default 1x). The playhead
+  advances by wall-clock time each frame, points are emitted in their
+  original timestamp order, and the cloud accumulates just like a live
+  session, so the retention window and FOV clip behave identically.
+- Use **Space** to pause, **R** to restart, **Z**/**X** to change speed.
+
 ### Optional FOV clip
 
-By default the viewer keeps every accumulated point on screen, even ones
-the LiDAR can no longer see, building a persistent map as you move it.
+By default the viewer keeps every accumulated point on screen.
 
-Pressing **F** turns on the FOV clip. When enabled, only points the LiDAR
-could currently see are drawn:
+Pressing **F** turns on the FOV clip, which splits the view into two layers
+so you see both the live sensor data and a persistent map of where the
+LiDAR is no longer pointing:
 
-- **Azimuth:** full 360 degrees about the Z axis (no limit).
-- **Elevation:** `-7 degrees` to `+59 degrees` measured from the horizontal
-  plane (the MID360's physical FOV).
+- **Live points** (captured within the last ~150 ms) are always drawn --
+  this is the current sensor reading.
+- **Older points** are drawn only where the LiDAR is **not** currently
+  pointing (outside its FOV), keeping a persistent background map. Where the
+  LiDAR **is** pointing, old points are hidden so the live data replaces
+  them instead of stacking stale points on top of the new reading.
 
-The clip is computed in the LiDAR body frame using the **current** attitude,
-so the visible cone sweeps correctly as the sensor rotates. Out-of-FOV
-points stay in the buffer and reappear when the LiDAR turns back toward
-them (or when you toggle the clip off with **F**). Nothing is discarded.
+The FOV cone is the MID360's physical coverage: 360 degrees about Z (no
+azimuth limit) and `-7 degrees` to `+59 degrees` elevation from the
+horizontal plane, evaluated in the body frame with the current IMU
+attitude. Nothing is discarded: hidden points stay in the buffer and
+reappear as persisted fill when the LiDAR turns away, or always when you
+toggle the clip back off with **F**.
+
+**Important:** while the clip is on, age-based expiry is disabled so
+out-of-FOV points survive sensor reorientation (otherwise the retention
+window would evict them during a slow flip before the clip could persist
+them). Memory is still bounded by a hard point cap; press **C** to clear.
+
+**Example:** point the LiDAR at the ceiling and turn the clip on -- the
+ceiling shows as live data. Flip the LiDAR down toward the floor: the
+ceiling stays visible as a persisted layer (the LiDAR is no longer pointing
+at it), while the floor fills in live where the LiDAR is now pointing. Turn
+the clip off to see every accumulated point again.
+
+The terminal prints `FOV clip ON` / `FOV clip OFF` each time you press **F**.
 
 ## Recorded CSV format
 
