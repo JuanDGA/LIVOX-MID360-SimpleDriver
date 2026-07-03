@@ -54,8 +54,36 @@ use std::time::{Duration, Instant};
 
 use glam::{Mat4, Quat, Vec3, Vec4};
 use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
+use serde::Deserialize;
 
 use lidar_reader::client::{DataStream, LivoxClient};
+use lidar_reader::points::Point;
+
+#[derive(Deserialize)]
+struct CsvImu {
+    #[serde(rename = "timestamp_ns")]
+    ts: u64,
+    gyro_x: f32,
+    gyro_y: f32,
+    gyro_z: f32,
+    acc_x: f32,
+    acc_y: f32,
+    acc_z: f32,
+}
+
+#[derive(Deserialize)]
+struct CsvPoint {
+    #[serde(rename = "timestamp_ns")]
+    ts: u64,
+    #[serde(rename = "x_m")]
+    x_m: f32,
+    #[serde(rename = "y_m")]
+    y_m: f32,
+    #[serde(rename = "z_m")]
+    z_m: f32,
+    reflectivity: u8,
+}
+
 use lidar_reader::imu::{AttitudeEstimator, OrientationHistory};
 use lidar_reader::packet::{DataPacket, DataPayload};
 use lidar_reader::protocol::DataType;
@@ -142,19 +170,33 @@ impl Cloud {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let host_ip = match args.get(1) {
-        Some(s) => s.parse().expect("invalid host IPv4 address"),
-        None => {
-            eprintln!("usage: lidar_viewer <host_ip> <lidar_ip>");
-            return;
-        }
-    };
-    let lidar_ip: Ipv4Addr = match args.get(2) {
-        Some(s) => s.parse().expect("invalid lidar IPv4 address"),
-        None => {
-            eprintln!("usage: lidar_viewer <host_ip> <lidar_ip>");
-            return;
-        }
+    let is_csv = args.get(1).map(|s| s == "--csv").unwrap_or(false);
+
+    let (host_ip, lidar_ip, csv_dir) = if is_csv {
+        let dir = match args.get(2) {
+            Some(d) => d.clone(),
+            None => {
+                eprintln!("usage: lidar_viewer --csv <dir>");
+                return;
+            }
+        };
+        (None, None, Some(dir))
+    } else {
+        let host_ip = match args.get(1) {
+            Some(s) => s.parse().expect("invalid host IPv4 address"),
+            None => {
+                eprintln!("usage: lidar_viewer <host_ip> <lidar_ip> OR lidar_viewer --csv <dir>");
+                return;
+            }
+        };
+        let lidar_ip = match args.get(2) {
+            Some(s) => s.parse().expect("invalid lidar IPv4 address"),
+            None => {
+                eprintln!("usage: lidar_viewer <host_ip> <lidar_ip> OR lidar_viewer --csv <dir>");
+                return;
+            }
+        };
+        (Some(host_ip), Some(lidar_ip), None)
     };
 
     let cloud: Arc<Mutex<Cloud>> = Arc::new(Mutex::new(Cloud::new()));
@@ -162,9 +204,12 @@ fn main() {
     let latest_q: Arc<Mutex<Quat>> = Arc::new(Mutex::new(Quat::IDENTITY));
     let fov_clip = Arc::new(AtomicBool::new(false));
 
-    spawn_data_thread(host_ip, lidar_ip, cloud.clone(), max_age_ms.clone(), latest_q.clone());
-
-    run_window(cloud, max_age_ms, latest_q, fov_clip);
+    if let Some(dir) = csv_dir {
+        run_playback_window(dir, cloud, max_age_ms, latest_q, fov_clip);
+    } else {
+        spawn_data_thread(host_ip.unwrap(), lidar_ip.unwrap(), cloud.clone(), max_age_ms.clone(), latest_q.clone());
+        run_window(cloud, max_age_ms, latest_q, fov_clip);
+    }
 }
 
 fn spawn_data_thread(
@@ -341,6 +386,307 @@ fn run_window(
             "Livox MID360 | points: {count} | age: {age:.0} ms | fov: {fov} | fps: {fps:.0} | dist: {:.1} m",
             cam.distance
         ));
+    }
+}
+
+fn run_playback_window(
+    csv_dir: String,
+    cloud: Arc<Mutex<Cloud>>,
+    max_age_ms: Arc<AtomicU32>,
+    latest_q: Arc<Mutex<Quat>>,
+    fov_clip: Arc<AtomicBool>,
+) {
+    println!("Loading data from {}...", csv_dir);
+    let mut rdr = csv::Reader::from_path(format!("{}/points.csv", csv_dir)).expect("Failed to open points.csv");
+    let points: Vec<CsvPoint> = rdr.deserialize().filter_map(Result::ok).collect();
+    
+    let mut rdr = csv::Reader::from_path(format!("{}/imu.csv", csv_dir)).expect("Failed to open imu.csv");
+    let mut imus: Vec<CsvImu> = rdr.deserialize().filter_map(Result::ok).collect();
+
+    // Sort by timestamp just in case
+    imus.sort_by_key(|i| i.ts);
+
+    if points.is_empty() || imus.is_empty() {
+        eprintln!("No data found in CSV files.");
+        return;
+    }
+
+    let min_ts = points.first().map(|p| p.ts).unwrap_or(u64::MAX).min(imus.first().map(|i| i.ts).unwrap_or(u64::MAX));
+    let max_ts = points.last().map(|p| p.ts).unwrap_or(0).max(imus.last().map(|i| i.ts).unwrap_or(0));
+    
+    println!("Data loaded. Minimum timestamp: {}, Maximum timestamp: {}", min_ts, max_ts);
+
+    let mut buffer = vec![0u32; WIDTH * HEIGHT];
+    let mut zbuffer = vec![f32::NEG_INFINITY; WIDTH * HEIGHT];
+
+    let mut window = match Window::new(
+        "Livox MID360 viewer (Playback)",
+        WIDTH,
+        HEIGHT,
+        WindowOptions::default(),
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("failed to open window: {e}");
+            return;
+        }
+    };
+
+    let mut cam = Camera {
+        yaw: 0.0,
+        pitch: 0.5,
+        distance: 8.0,
+        target: [0.0, 0.0, 0.0],
+    };
+    
+    let mut prev_mouse: Option<(f32, f32)> = None;
+    
+    // Playback state
+    let total_duration_ns = max_ts.saturating_sub(min_ts);
+    let mut current_sim_time = min_ts;
+    let mut is_paused = true;
+    let mut last_real_time = Instant::now();
+    let mut last_imu_idx = 0;
+    
+    let mut estimator = AttitudeEstimator::new();
+    let mut history = OrientationHistory::new(ORIENTATION_HISTORY_LEN);
+
+    // Initial pre-load of IMU to get some attitude
+    for i in &imus {
+        if i.ts <= current_sim_time {
+            let gyro = Vec3::new(i.gyro_x, i.gyro_y, i.gyro_z);
+            let acc = Vec3::new(i.acc_x, i.acc_y, i.acc_z);
+            estimator.update(gyro, acc, i.ts);
+            history.push(i.ts, estimator.q);
+            last_imu_idx += 1;
+        } else {
+            break;
+        }
+    }
+    
+    if let Ok(mut q) = latest_q.lock() {
+        *q = estimator.q;
+    }
+
+    let mut points_idx = 0;
+    
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        handle_input_playback(&window, &mut cam, &mut prev_mouse, &max_age_ms, &cloud, &fov_clip, &mut is_paused, &mut current_sim_time, min_ts, total_duration_ns);
+
+        let now = Instant::now();
+        let dt = now.duration_since(last_real_time);
+        last_real_time = now;
+
+        if !is_paused && current_sim_time < max_ts {
+            current_sim_time += dt.as_nanos() as u64;
+            if current_sim_time > max_ts {
+                current_sim_time = max_ts;
+                is_paused = true;
+            }
+        }
+        
+        // Seek handler resyncs index if we rewind
+        if points_idx > 0 && points_idx < points.len() && points[points_idx].ts > current_sim_time {
+            // rewind
+            points_idx = points.partition_point(|p| p.ts < current_sim_time);
+            last_imu_idx = imus.partition_point(|i| i.ts < current_sim_time);
+            
+            // clear cloud
+            if let Ok(mut c) = cloud.lock() {
+                c.clear();
+            }
+        }
+
+        // Process IMU up to current_sim_time
+        while last_imu_idx < imus.len() && imus[last_imu_idx].ts <= current_sim_time {
+            let i = &imus[last_imu_idx];
+            let gyro = Vec3::new(i.gyro_x, i.gyro_y, i.gyro_z);
+            let acc = Vec3::new(i.acc_x, i.acc_y, i.acc_z);
+            estimator.update(gyro, acc, i.ts);
+            history.push(i.ts, estimator.q);
+            if let Ok(mut q) = latest_q.lock() {
+                *q = estimator.q;
+            }
+            last_imu_idx += 1;
+        }
+
+        // Process Points up to current_sim_time
+        let mut new_points = Vec::new();
+        let mut batch_ts = 0;
+        
+        while points_idx < points.len() && points[points_idx].ts <= current_sim_time {
+            let p_raw = &points[points_idx];
+            batch_ts = p_raw.ts;
+            
+            // Simulate the coordinate conversion handled by MID360 driver
+            let x_mm = (p_raw.x_m * 1000.0) as i32;
+            let y_mm = (p_raw.y_m * 1000.0) as i32;
+            let z_mm = (p_raw.z_m * 1000.0) as i32;
+            let tag = lidar_reader::points::Tag(0);
+            let p = Point::Cartesian32(lidar_reader::points::Cartesian32Point {
+                x_mm,
+                y_mm,
+                z_mm,
+                reflectivity: p_raw.reflectivity,
+                tag,
+            });
+            new_points.push(p);
+            
+            points_idx += 1;
+            
+            // Break loop if we accumulated a reasonable batch so we update attitude
+            if new_points.len() > 96 * 3 {
+               // Push batch
+                let q = history.at(batch_ts);
+                let max_age_ns = (f32::from_bits(max_age_ms.load(Ordering::Relaxed))
+                    * 1_000_000.0) as u64;
+                if let Ok(mut c) = cloud.lock() {
+                    c.add(&new_points, batch_ts, max_age_ns, q);
+                }
+                new_points.clear();
+            }
+        }
+        
+        if !new_points.is_empty() {
+             let q = history.at(batch_ts);
+            let max_age_ns = (f32::from_bits(max_age_ms.load(Ordering::Relaxed))
+                * 1_000_000.0) as u64;
+            if let Ok(mut c) = cloud.lock() {
+                c.add(&new_points, batch_ts, max_age_ns, q);
+            }
+        }
+        
+        // Update expiration manually if paused, so points still fade if age changes
+        if is_paused {
+             let max_age_ns = (f32::from_bits(max_age_ms.load(Ordering::Relaxed))
+                    * 1_000_000.0) as u64;
+             if let Ok(mut c) = cloud.lock() {
+                    c.latest_ts = current_sim_time;
+                    c.expire(max_age_ns);
+             }
+        }
+
+        let view = Mat4::look_at_rh(cam.eye(), Vec3::from(cam.target), Vec3::Y);
+        let proj = Mat4::perspective_rh(1.0, WIDTH as f32 / HEIGHT as f32, 0.05, 1000.0);
+
+        buffer.fill(0xFF0A0A0F); 
+        zbuffer.fill(f32::NEG_INFINITY);
+
+        draw_axes(&mut buffer, &mut zbuffer, view, proj);
+
+        let q_current = latest_q.lock().map(|q| *q).unwrap_or(Quat::IDENTITY);
+        let clip = fov_clip.load(Ordering::Relaxed);
+        let count = render_points(&cloud, &mut buffer, &mut zbuffer, view, proj, q_current, clip);
+
+        // Draw Progress Bar
+        draw_progress_bar(&mut buffer, current_sim_time, min_ts, total_duration_ns);
+
+        window.update_with_buffer(&buffer, WIDTH, HEIGHT).expect("update failed");
+
+        let progress = (current_sim_time.saturating_sub(min_ts) as f64 / total_duration_ns as f64) * 100.0;
+        let age = f32::from_bits(max_age_ms.load(Ordering::Relaxed));
+        let state = if is_paused { "Paused" } else { "Playing" };
+        window.set_title(&format!(
+            "Livox Playback | [{}] progress: {:.1}% | points: {} | age: {:.0} ms | dist: {:.1} m",
+             state, progress.max(0.0).min(100.0), count, age, cam.distance
+        ));
+    }
+}
+
+fn draw_progress_bar(buffer: &mut [u32], current: u64, min_ts: u64, total: u64) {
+    let bar_height = 20;
+    let bar_y = HEIGHT - bar_height - 10;
+    let bar_margin = 20;
+    let bar_width = WIDTH - bar_margin * 2;
+    
+    let progress = (current.saturating_sub(min_ts) as f64 / total.max(1) as f64).clamp(0.0, 1.0);
+    let fill_width = (progress * bar_width as f64) as usize;
+    
+    for y in bar_y..(bar_y + bar_height) {
+        let y_offset = y * WIDTH;
+        for x in bar_margin..(bar_margin + bar_width) {
+            let idx = y_offset + x;
+            if x - bar_margin < fill_width {
+                buffer[idx] = 0xFF55aa55; // green filling
+            } else {
+                buffer[idx] = 0xFF444444; // grey background
+            }
+        }
+    }
+}
+
+fn handle_input_playback(
+    window: &Window,
+    cam: &mut Camera,
+    prev_mouse: &mut Option<(f32, f32)>,
+    max_age_ms: &AtomicU32,
+    cloud: &Mutex<Cloud>,
+    fov_clip: &AtomicBool,
+    is_paused: &mut bool,
+    current_sim_time: &mut u64,
+    min_ts: u64,
+    total_ns: u64,
+) {
+    let mouse = window.get_mouse_pos(MouseMode::Pass);
+    let (dx, dy) = match (mouse, *prev_mouse) {
+        (Some((x, y)), Some((px, py))) => (x - px, y - py),
+        _ => (0.0, 0.0),
+    };
+    *prev_mouse = mouse;
+    
+    let bar_height = 20;
+    let bar_y = HEIGHT - bar_height - 10;
+    let bar_margin = 20.0;
+    let bar_width = (WIDTH as f32) - bar_margin * 2.0;
+
+    let mut seeking = false;
+
+    if window.get_mouse_down(MouseButton::Left) {
+        if let Some((mx, my)) = mouse {
+           if my >= bar_y as f32 && my <= (bar_y + bar_height) as f32 && mx >= bar_margin && mx <= bar_margin + bar_width {
+               // click on progress bar
+               let progress = ((mx - bar_margin) / bar_width).clamp(0.0, 1.0);
+               *current_sim_time = min_ts + (progress as f64 * total_ns as f64) as u64;
+               seeking = true;
+           } else {
+               cam.yaw -= dx * 0.01;
+               cam.pitch += dy * 0.01;
+               cam.pitch = cam.pitch.clamp(-1.5, 1.5);
+           }
+        }
+    }
+    
+    if window.get_mouse_down(MouseButton::Right) {
+        let scale = cam.distance * 0.0015;
+        let right = Vec3::new(cam.yaw.sin(), 0.0, -cam.yaw.cos());
+        let up = Vec3::Y;
+        cam.target[0] -= right.x * dx * scale + up.x * dy * scale;
+        cam.target[1] -= right.y * dx * scale + up.y * dy * scale;
+        cam.target[2] -= right.z * dx * scale + up.z * dy * scale;
+    }
+
+    if let Some((_, sy)) = window.get_scroll_wheel() {
+        cam.distance *= 1.0 - sy * 0.1;
+        cam.distance = cam.distance.clamp(0.2, 500.0);
+    }
+
+    if window.is_key_pressed(Key::Space, minifb::KeyRepeat::No) {
+        *is_paused = !*is_paused;
+    }
+    if window.is_key_pressed(Key::Up, minifb::KeyRepeat::Yes) {
+        bump_age(max_age_ms, AGE_STEP_MS);
+    }
+    if window.is_key_pressed(Key::Down, minifb::KeyRepeat::Yes) {
+        bump_age(max_age_ms, -AGE_STEP_MS);
+    }
+    if window.is_key_pressed(Key::C, minifb::KeyRepeat::No) && !seeking
+        && let Ok(mut c) = cloud.lock()
+    {
+        c.clear();
+    }
+    if window.is_key_pressed(Key::F, minifb::KeyRepeat::No) {
+        let cur = fov_clip.load(Ordering::Relaxed);
+        fov_clip.store(!cur, Ordering::Relaxed);
     }
 }
 
