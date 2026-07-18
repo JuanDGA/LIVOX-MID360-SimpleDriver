@@ -20,7 +20,8 @@ pub mod packet;
 pub mod points;
 pub mod protocol;
 pub mod recorder;
-#[cfg(feature = "viewer")]
+pub mod utils;
+#[cfg(any(feature = "viewer", feature = "encoder"))]
 pub mod imu;
 
 pub use client::{DataStream, DiscoveredDevice, LivoxClient};

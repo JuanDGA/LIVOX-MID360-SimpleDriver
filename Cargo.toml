@@ -9,6 +9,8 @@ license = "Apache-2.0"
 default = []
 # Enables the `lidar_viewer` binary (3D point-cloud window).
 viewer = ["dep:minifb", "dep:glam"]
+# Enables the `lidar_encoder` binary (headless live/replay encoder).
+encoder = ["dep:glam"]
 
 [dependencies]
 if-addrs = "0.13"
@@ -29,3 +31,8 @@ path = "src/main.rs"
 name = "lidar_viewer"
 path = "src/bin/lidar_viewer.rs"
 required-features = ["viewer"]
+
+[[bin]]
+name = "lidar_encoder"
+path = "src/bin/lidar_encoder.rs"
+required-features = ["encoder"]
