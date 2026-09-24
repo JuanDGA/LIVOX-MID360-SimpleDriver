@@ -1,5 +1,5 @@
 [package]
-name = "lidar_reader"
+name = "livox_mid360"
 version = "0.1.0"
 edition = "2024"
 authors = ["Juan David Guevara Arévalo <soyjuandavidguevara@gmail.com>"]

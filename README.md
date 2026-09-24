@@ -1,4 +1,4 @@
-# lidar_reader
+# livox_mid360
 
 A dependency-light Rust library for the
 [Livox MID360](https://www.livoxtech.com/mid-360) LiDAR. It discovers sensors
@@ -50,9 +50,9 @@ cargo build --release --features cloud,encode,imu
 
 Optional features:
 
-- `cloud` -- rolling point buffer (`lidar_reader::cloud::Cloud`).
-- `encode` -- PCA octree tokenizer (`lidar_reader::encode`).
-- `imu` -- Mahony attitude estimator (`lidar_reader::imu`).
+- `cloud` -- rolling point buffer (`livox_mid360::cloud::Cloud`).
+- `encode` -- PCA octree tokenizer (`livox_mid360::encode`).
+- `imu` -- Mahony attitude estimator (`livox_mid360::imu`).
 
 `cloud` and `imu` pull in `glam`. The default build does not.
 
@@ -65,7 +65,7 @@ configures the MID360, and yields parsed packets:
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use lidar_reader::{DataPayload, LidarError, LiveReader};
+use livox_mid360::{DataPayload, LidarError, LiveReader};
 
 # async fn run() -> Result<(), LidarError> {
 let host_ip = Ipv4Addr::new(192, 168, 1, 50);
@@ -74,10 +74,10 @@ let lidar_ip = Ipv4Addr::new(192, 168, 1, 100);
 let reader = LiveReader::connect(host_ip, lidar_ip).await?;
 loop {
     match reader.recv().await? {
-        lidar_reader::Sample::Points { header, points } => {
+        livox_mid360::Sample::Points { header, points } => {
             let _ = (header.timestamp, points.len());
         }
-        lidar_reader::Sample::Imu { header, sample } => {
+        livox_mid360::Sample::Imu { header, sample } => {
             let _ = (header.timestamp, sample.gyro_x);
         }
     }
@@ -127,7 +127,7 @@ Default ports (matching the MID360 protocol):
 | IMU data             | 56400      | 56401     |
 | Log push             | 56500      | 56501     |
 
-Constants live in `lidar_reader::protocol`.
+Constants live in `livox_mid360::protocol`.
 
 ## Testing
 
