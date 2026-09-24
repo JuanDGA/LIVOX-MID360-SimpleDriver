@@ -1,20 +1,20 @@
 // Copyright 2026 Juan David Guevara Arévalo
-// 
+//
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
 //    You may obtain a copy of the License at
-// 
+//
 //        http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 //    Unless required by applicable law or agreed to in writing, software
 //    distributed under the License is distributed on an "AS IS" BASIS,
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use crate::crc::crc32;
+use crate::data::points::{ImuSample, Point};
 use crate::error::{LidarError, Result};
-use crate::points::{ImuSample, Point};
+use crate::protocol::crc::crc32;
 use crate::protocol::{DataType, TimestampType};
 
 pub const DATA_HEADER_SIZE: usize = 36;
@@ -203,7 +203,7 @@ impl DataPacket {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::points::{Cartesian32Point, Tag};
+    use crate::data::points::{Cartesian32Point, Tag};
 
     #[test]
     fn roundtrip_imu_packet() {

@@ -1,11 +1,11 @@
 // Copyright 2026 Juan David Guevara Arévalo
-// 
+//
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
 //    You may obtain a copy of the License at
-// 
+//
 //        http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 //    Unless required by applicable law or agreed to in writing, software
 //    distributed under the License is distributed on an "AS IS" BASIS,
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -134,7 +134,11 @@ impl OrientationHistory {
             let (t1, q1) = self.samples[i + 1];
             if ts >= t0 && ts <= t1 {
                 let span = (t1 - t0) as f32;
-                let s = if span > 0.0 { (ts - t0) as f32 / span } else { 0.0 };
+                let s = if span > 0.0 {
+                    (ts - t0) as f32 / span
+                } else {
+                    0.0
+                };
                 return q0.slerp(q1, s);
             }
         }

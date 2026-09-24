@@ -1,11 +1,11 @@
 // Copyright 2026 Juan David Guevara Arévalo
-// 
+//
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
 //    You may obtain a copy of the License at
-// 
+//
 //        http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 //    Unless required by applicable law or agreed to in writing, software
 //    distributed under the License is distributed on an "AS IS" BASIS,
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,6 +18,19 @@ use std::net::SocketAddr;
 pub enum LidarError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("failed to bind {resource} socket to {addr}: {source}")]
+    Bind {
+        resource: &'static str,
+        addr: SocketAddr,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error(
+        "host_ip must be a specific local interface address (0.0.0.0 is not valid for streaming)"
+    )]
+    InvalidHost,
 
     #[error("packet too short: need {need} bytes, got {got}")]
     PacketTooShort { need: usize, got: usize },

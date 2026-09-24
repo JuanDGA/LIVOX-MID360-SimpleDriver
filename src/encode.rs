@@ -75,7 +75,14 @@ pub fn encode(cloud: &[[f32; 3]], rounds: u8) -> Result<Vec<f32>, EncodeError> {
     let min = scale(obb.half_extents, -1.0);
 
     let mut tokens = Vec::with_capacity(FLOATS_PER_SEGMENT * 8usize.pow(rounds as u32));
-    encode_box(&local, min, obb.half_extents, rounds, local.len() as f64, &mut tokens);
+    encode_box(
+        &local,
+        min,
+        obb.half_extents,
+        rounds,
+        local.len() as f64,
+        &mut tokens,
+    );
     Ok(tokens)
 }
 
@@ -364,8 +371,14 @@ mod tests {
     #[test]
     fn rejects_out_of_range_rounds() {
         let cloud = [[0.0, 0.0, 0.0]];
-        assert!(matches!(encode(&cloud, 0), Err(EncodeError::InvalidRounds(0))));
-        assert!(matches!(encode(&cloud, 6), Err(EncodeError::InvalidRounds(6))));
+        assert!(matches!(
+            encode(&cloud, 0),
+            Err(EncodeError::InvalidRounds(0))
+        ));
+        assert!(matches!(
+            encode(&cloud, 6),
+            Err(EncodeError::InvalidRounds(6))
+        ));
     }
 
     #[test]
@@ -454,11 +467,7 @@ mod tests {
 
     #[test]
     fn jacobi_recovers_symmetric_matrix() {
-        let m = [
-            [4.0, 1.0, 2.0],
-            [1.0, 3.0, 0.5],
-            [2.0, 0.5, 5.0],
-        ];
+        let m = [[4.0, 1.0, 2.0], [1.0, 3.0, 0.5], [2.0, 0.5, 5.0]];
         let (values, vectors) = jacobi_eigen(m);
         for i in 0..3 {
             for j in 0..3 {

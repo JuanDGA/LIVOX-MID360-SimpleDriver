@@ -1,11 +1,11 @@
 // Copyright 2026 Juan David Guevara Arévalo
-// 
+//
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
 //    You may obtain a copy of the License at
-// 
+//
 //        http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 //    Unless required by applicable law or agreed to in writing, software
 //    distributed under the License is distributed on an "AS IS" BASIS,
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -282,12 +282,8 @@ impl Point {
 
     pub fn parse(data_type: DataType, buf: &[u8]) -> Result<Self> {
         match data_type {
-            DataType::PointCloudCartesian32 => {
-                Cartesian32Point::parse(buf).map(Point::Cartesian32)
-            }
-            DataType::PointCloudCartesian16 => {
-                Cartesian16Point::parse(buf).map(Point::Cartesian16)
-            }
+            DataType::PointCloudCartesian32 => Cartesian32Point::parse(buf).map(Point::Cartesian32),
+            DataType::PointCloudCartesian16 => Cartesian16Point::parse(buf).map(Point::Cartesian16),
             DataType::PointCloudSpherical => SphericalPoint::parse(buf).map(Point::Spherical),
             DataType::Imu => Err(LidarError::InvalidDataType(0)),
         }

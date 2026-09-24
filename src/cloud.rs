@@ -20,7 +20,7 @@
 
 use glam::{Quat, Vec3};
 
-use crate::points::Point;
+use crate::Point;
 
 /// Hard cap on buffered points so a runaway stream never blows up memory.
 const MAX_POINTS: usize = 600_000;
@@ -105,7 +105,7 @@ impl Cloud {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::points::{Cartesian32Point, Tag};
+    use crate::{Cartesian32Point, Point, Tag};
 
     fn pt(z_mm: i32) -> Point {
         Point::Cartesian32(Cartesian32Point {

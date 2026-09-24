@@ -1,11 +1,11 @@
 // Copyright 2026 Juan David Guevara Arévalo
-// 
+//
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
 //    You may obtain a copy of the License at
-// 
+//
 //        http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 //    Unless required by applicable law or agreed to in writing, software
 //    distributed under the License is distributed on an "AS IS" BASIS,
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -13,6 +13,9 @@
 //    limitations under the License.
 
 use crate::error::{LidarError, Result};
+
+pub mod command;
+pub mod crc;
 
 // Default MID360 ports.
 pub const DISCOVERY_PORT: u16 = 56000;
@@ -279,9 +282,21 @@ impl ParameterKey {
 /// Default recommended host-side ports for a single LiDAR session.
 pub fn default_host_sockets(bind_ip: std::net::Ipv4Addr) -> [(std::net::SocketAddr, u16); 4] {
     [
-        (std::net::SocketAddr::from((bind_ip, HOST_CMD_PORT)), CMD_PORT),
-        (std::net::SocketAddr::from((bind_ip, HOST_PUSH_PORT)), PUSH_PORT),
-        (std::net::SocketAddr::from((bind_ip, HOST_DATA_PORT)), DATA_PORT),
-        (std::net::SocketAddr::from((bind_ip, HOST_IMU_PORT)), IMU_PORT),
+        (
+            std::net::SocketAddr::from((bind_ip, HOST_CMD_PORT)),
+            CMD_PORT,
+        ),
+        (
+            std::net::SocketAddr::from((bind_ip, HOST_PUSH_PORT)),
+            PUSH_PORT,
+        ),
+        (
+            std::net::SocketAddr::from((bind_ip, HOST_DATA_PORT)),
+            DATA_PORT,
+        ),
+        (
+            std::net::SocketAddr::from((bind_ip, HOST_IMU_PORT)),
+            IMU_PORT,
+        ),
     ]
 }

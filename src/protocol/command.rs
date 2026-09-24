@@ -1,11 +1,11 @@
 // Copyright 2026 Juan David Guevara Arévalo
-// 
+//
 //    Licensed under the Apache License, Version 2.0 (the "License");
 //    you may not use this file except in compliance with the License.
 //    You may obtain a copy of the License at
-// 
+//
 //        http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 //    Unless required by applicable law or agreed to in writing, software
 //    distributed under the License is distributed on an "AS IS" BASIS,
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -14,9 +14,9 @@
 
 use std::net::Ipv4Addr;
 
-use crate::crc::{crc16_ccitt_false, crc32};
 use crate::error::{LidarError, Result};
-use crate::protocol::{CmdType, ParameterKey, ReturnCode, SenderType, SOF};
+use crate::protocol::crc::{crc16_ccitt_false, crc32};
+use crate::protocol::{CmdType, ParameterKey, ReturnCode, SOF, SenderType};
 
 pub const CMD_HEADER_SIZE: usize = 24;
 
@@ -110,11 +110,7 @@ impl CommandFrame {
         buf[12..18].fill(0); // reserved
         buf[18..20].copy_from_slice(&0u16.to_le_bytes()); // crc16 placeholder
         let data_len = self.length as usize - CMD_HEADER_SIZE;
-        let data_crc = if data_len == 0 {
-            0
-        } else {
-            crc32(&self.data)
-        };
+        let data_crc = if data_len == 0 { 0 } else { crc32(&self.data) };
         buf[20..24].copy_from_slice(&data_crc.to_le_bytes());
         buf[CMD_HEADER_SIZE..self.length as usize].copy_from_slice(&self.data);
 
@@ -252,10 +248,7 @@ pub type KeyValueList = Vec<(u16, Vec<u8>)>;
 /// Parse a parameter configuration ACK payload (cmd_id 0x0100).
 pub fn parse_param_config_ack(data: &[u8]) -> Result<(ReturnCode, Option<u16>)> {
     if data.is_empty() {
-        return Err(LidarError::PacketTooShort {
-            need: 1,
-            got: 0,
-        });
+        return Err(LidarError::PacketTooShort { need: 1, got: 0 });
     }
     let ret_code = ReturnCode::try_from(data[0])?;
     let error_key = if data.len() >= 3 {
@@ -269,10 +262,7 @@ pub fn parse_param_config_ack(data: &[u8]) -> Result<(ReturnCode, Option<u16>)> 
 /// Parse a parameter inquiry ACK payload (cmd_id 0x0101).
 pub fn parse_param_inquire_ack(data: &[u8]) -> Result<(ReturnCode, KeyValueList)> {
     if data.is_empty() {
-        return Err(LidarError::PacketTooShort {
-            need: 1,
-            got: 0,
-        });
+        return Err(LidarError::PacketTooShort { need: 1, got: 0 });
     }
     let ret_code = ReturnCode::try_from(data[0])?;
     let pairs = decode_key_value_list(&data[1..])?;
@@ -309,7 +299,13 @@ mod tests {
         let items = vec![(0x0006u16, &[192u8, 168, 1, 100, 0x63, 0x01, 0x63, 0x00][..])];
         let encoded = encode_key_value_list(&items);
         let decoded = decode_key_value_list(&encoded).unwrap();
-        assert_eq!(items, decoded.iter().map(|(k, v)| (*k, v.as_slice())).collect::<Vec<_>>());
+        assert_eq!(
+            items,
+            decoded
+                .iter()
+                .map(|(k, v)| (*k, v.as_slice()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

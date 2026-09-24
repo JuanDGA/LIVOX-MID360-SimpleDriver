@@ -12,6 +12,6 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-#[cfg(any(feature = "viewer", feature = "encoder"))]
-pub mod cloud;
-pub mod encode;
+pub mod client;
+
+pub use client::{DiscoveredDevice, LivoxClient};

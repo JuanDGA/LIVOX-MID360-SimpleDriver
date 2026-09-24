@@ -4,35 +4,20 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Juan David Guevara Arévalo <soyjuandavidguevara@gmail.com>"]
 license = "Apache-2.0"
+description = "Livox MID360 communication, packet parsing, and optional cloud/encode/IMU helpers"
 
 [features]
 default = []
-# Enables the `lidar_viewer` binary (3D point-cloud window).
-viewer = ["dep:minifb", "dep:glam"]
-# Enables the `lidar_encoder` binary (headless live/replay encoder).
-encoder = ["dep:glam"]
+cloud = ["dep:glam"]
+encode = []
+imu = ["dep:glam"]
 
 [dependencies]
 if-addrs = "0.13"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
 tracing = "0.1"
 glam = { version = "0.29", optional = true }
-minifb = { version = "0.27", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
-
-[[bin]]
-name = "lidar_reader"
-path = "src/main.rs"
-
-[[bin]]
-name = "lidar_viewer"
-path = "src/bin/lidar_viewer.rs"
-required-features = ["viewer"]
-
-[[bin]]
-name = "lidar_encoder"
-path = "src/bin/lidar_encoder.rs"
-required-features = ["encoder"]
