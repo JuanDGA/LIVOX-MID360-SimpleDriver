@@ -1,0 +1,24 @@
+name: Python
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install maturin and pytest
+        run: pip install maturin pytest pytest-asyncio
+      - name: Build and test bindings
+        working-directory: python
+        run: |
+          maturin develop
+          pytest

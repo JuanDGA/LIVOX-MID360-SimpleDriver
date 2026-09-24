@@ -1,0 +1,18 @@
+[package]
+name = "livox_mid360_py"
+version = "0.1.0"
+edition = "2024"
+authors = ["Juan David Guevara Arévalo <soyjuandavidguevara@gmail.com>"]
+license = "Apache-2.0"
+description = "Python bindings for livox_mid360"
+publish = false
+
+[lib]
+name = "livox_mid360"
+crate-type = ["cdylib"]
+
+[dependencies]
+livox_rs = { path = "..", package = "livox_mid360" }
+pyo3 = { version = "0.26", features = ["abi3-py312"] }
+pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }

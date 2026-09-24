@@ -15,6 +15,7 @@ sibling package `lidar_apps`.
 - [Building](#building)
 - [Using the library](#using-the-library)
 - [Network ports](#network-ports)
+- [Python bindings](#python-bindings)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 
@@ -114,6 +115,19 @@ Coordinates from `Point::coords_m()` are metres in the LiDAR frame.
 The APIs are async and use Tokio (`tokio::net::UdpSocket`). Call them from a
 Tokio runtime.
 
+## Python bindings
+
+The `python/` directory is a separate PyO3 extension (`pip` name `livox-mid360`,
+import `livox_mid360`). It depends on this crate and leaves the Rust API
+unchanged. Python 3.12+ is required. See [python/README.md](python/README.md).
+
+```python
+from livox_mid360 import LiveReader
+
+reader = await LiveReader.connect("192.168.1.50", "192.168.1.100")
+sample = await reader.recv()
+```
+
 ## Network ports
 
 Default ports (matching the MID360 protocol):
@@ -134,6 +148,13 @@ Constants live in `livox_mid360::protocol`.
 ```sh
 cargo test
 cargo test --features cloud,encode,imu
+```
+
+Python bindings (from `python/`):
+
+```sh
+maturin develop
+pytest
 ```
 
 Tests use mock UDP sockets; no hardware is required.
