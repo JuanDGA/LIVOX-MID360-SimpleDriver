@@ -13,6 +13,7 @@
 //    limitations under the License.
 
 mod client;
+mod encode;
 mod error;
 mod session;
 mod types;
@@ -42,6 +43,11 @@ fn livox_mid360(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImuSample>()?;
     m.add_class::<PyDataType>()?;
     m.add_class::<PyTimestampType>()?;
+    m.add_function(wrap_pyfunction!(encode::encode, m)?)?;
+
+    m.add("MIN_ROUNDS", livox_rs::encode::MIN_ROUNDS)?;
+    m.add("MAX_ROUNDS", livox_rs::encode::MAX_ROUNDS)?;
+    m.add("FLOATS_PER_SEGMENT", livox_rs::encode::FLOATS_PER_SEGMENT)?;
 
     m.add("DISCOVERY_PORT", livox_rs::DISCOVERY_PORT)?;
     m.add("CMD_PORT", livox_rs::CMD_PORT)?;

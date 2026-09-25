@@ -98,3 +98,26 @@ async def test_connect_rejects_unspecified_host():
 def test_connect_rejects_invalid_ip():
     with pytest.raises(ValueError, match="invalid host_ip"):
         mid.LiveReader.connect("not-an-ip", "127.0.0.1")
+
+
+def test_encode_vector_length():
+    cloud = [(0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (2.0, 0.0, 1.0)]
+    for rounds in range(mid.MIN_ROUNDS, mid.MAX_ROUNDS + 1):
+        tokens = mid.encode(cloud, rounds)
+        assert len(tokens) == mid.FLOATS_PER_SEGMENT * 8**rounds
+
+
+def test_encode_from_point_coords():
+    point = mid.Point.cartesian32(1000, 200, 100, 50)
+    vector = mid.encode([point.coords_m()], 1)
+    assert len(vector) == mid.FLOATS_PER_SEGMENT * 8
+
+
+def test_encode_rejects_empty_cloud():
+    with pytest.raises(ValueError, match="empty point cloud"):
+        mid.encode([], 1)
+
+
+def test_encode_rejects_invalid_rounds():
+    with pytest.raises(ValueError, match="rounds"):
+        mid.encode([(0.0, 0.0, 0.0)], 0)

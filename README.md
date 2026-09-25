@@ -14,6 +14,7 @@ sibling package `lidar_apps`.
 - [Network setup](#network-setup)
 - [Building](#building)
 - [Using the library](#using-the-library)
+- [Encoding a point cloud](#encoding-a-point-cloud)
 - [Network ports](#network-ports)
 - [Python bindings](#python-bindings)
 - [Testing](#testing)
@@ -115,11 +116,89 @@ Coordinates from `Point::coords_m()` are metres in the LiDAR frame.
 The APIs are async and use Tokio (`tokio::net::UdpSocket`). Call them from a
 Tokio runtime.
 
+## Encoding a point cloud
+
+The optional `encode` feature maps a cloud of `(x, y, z)` positions in metres
+to a fixed-length token vector. `rounds` is 1 through 5. The vector has
+`4 * 8^rounds` floats: each octree leaf stores a point-count fraction and a
+normalized centroid.
+
+Enable the feature and encode a cloud:
+
+```rust
+use livox_mid360::encode::{self, FLOATS_PER_SEGMENT};
+
+let cloud = [
+    [0.0, 0.0, 0.0],
+    [1.0, 0.2, 0.1],
+    [0.5, -0.3, 0.8],
+];
+let vector = encode::encode(&cloud, 2).unwrap();
+assert_eq!(vector.len(), FLOATS_PER_SEGMENT * 8usize.pow(2));
+```
+
+From a live point packet:
+
+```rust
+use livox_mid360::{encode, Sample};
+
+match reader.recv().await? {
+    Sample::Points { points, .. } => {
+        let cloud: Vec<[f32; 3]> = points
+            .iter()
+            .map(|p| {
+                let (x, y, z) = p.coords_m();
+                [x, y, z]
+            })
+            .collect();
+        let vector = encode::encode(&cloud, 2)?;
+    }
+    Sample::Imu { .. } => {}
+}
+```
+
+Python (`encode` is included in the bindings):
+
+```python
+from livox_mid360 import encode, FLOATS_PER_SEGMENT
+
+cloud = [
+    (0.0, 0.0, 0.0),
+    (1.0, 0.2, 0.1),
+    (0.5, -0.3, 0.8),
+]
+vector = encode(cloud, 2)
+assert len(vector) == FLOATS_PER_SEGMENT * 8 ** 2
+```
+
+From a live sample:
+
+```python
+sample = await reader.recv()
+if sample.kind == "points":
+    cloud = [p.coords_m() for p in sample.points]
+    vector = encode(cloud, 2)
+```
+
+Build the Rust crate with `--features encode`. See
+[python/README.md](python/README.md) for the Python install.
+
 ## Python bindings
 
 The `python/` directory is a separate PyO3 extension (`pip` name `livox-mid360`,
 import `livox_mid360`). It depends on this crate and leaves the Rust API
-unchanged. Python 3.12+ is required. See [python/README.md](python/README.md).
+unchanged. Python 3.12+ is required. A Rust toolchain is required to compile.
+
+```sh
+cd python
+python3 -m venv .venv
+source .venv/bin/activate
+pip install maturin
+maturin build --release
+pip install target/wheels/livox_mid360-*.whl
+```
+
+See [python/README.md](python/README.md) for the editable install used in tests.
 
 ```python
 from livox_mid360 import LiveReader
@@ -150,9 +229,10 @@ cargo test
 cargo test --features cloud,encode,imu
 ```
 
-Python bindings (from `python/`):
+Python bindings (from `python/`, in a venv):
 
 ```sh
+pip install maturin pytest pytest-asyncio
 maturin develop
 pytest
 ```

@@ -57,6 +57,17 @@ pub enum EncodeError {
 }
 
 /// Encodes a point cloud into a fixed-order token vector. See module docs.
+///
+/// `cloud` is positions in metres. `rounds` is [`MIN_ROUNDS`] through
+/// [`MAX_ROUNDS`]. The vector length is `FLOATS_PER_SEGMENT * 8^rounds`.
+///
+/// ```
+/// use livox_mid360::encode::{self, FLOATS_PER_SEGMENT};
+///
+/// let cloud = [[0.0, 0.0, 0.0], [1.0, 0.2, 0.1], [0.5, -0.3, 0.8]];
+/// let vector = encode::encode(&cloud, 2).unwrap();
+/// assert_eq!(vector.len(), FLOATS_PER_SEGMENT * 8usize.pow(2));
+/// ```
 pub fn encode(cloud: &[[f32; 3]], rounds: u8) -> Result<Vec<f32>, EncodeError> {
     if cloud.is_empty() {
         return Err(EncodeError::EmptyCloud);

@@ -12,7 +12,7 @@ name = "livox_mid360"
 crate-type = ["cdylib"]
 
 [dependencies]
-livox_rs = { path = "..", package = "livox_mid360" }
+livox_rs = { path = "..", package = "livox_mid360", features = ["encode"] }
 pyo3 = { version = "0.26", features = ["abi3-py312"] }
 pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
