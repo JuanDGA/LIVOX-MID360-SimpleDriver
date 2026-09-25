@@ -15,10 +15,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install maturin and pytest
-        run: pip install maturin pytest pytest-asyncio
       - name: Build and test bindings
         working-directory: python
         run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin pytest pytest-asyncio
           maturin develop
           pytest
