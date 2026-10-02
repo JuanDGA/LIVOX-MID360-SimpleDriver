@@ -22,7 +22,7 @@ use pyo3::prelude::*;
 
 use crate::error::map_err;
 
-#[pyclass(eq, eq_int, frozen, name = "DataType")]
+#[pyclass(eq, eq_int, frozen, name = "DataType", module = "livox_mid360")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PyDataType {
@@ -54,7 +54,7 @@ impl From<DataType> for PyDataType {
     }
 }
 
-#[pyclass(eq, eq_int, frozen, name = "TimestampType")]
+#[pyclass(eq, eq_int, frozen, name = "TimestampType", module = "livox_mid360")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PyTimestampType {
@@ -83,7 +83,7 @@ impl From<TimestampType> for PyTimestampType {
     }
 }
 
-#[pyclass(frozen, name = "Tag")]
+#[pyclass(frozen, name = "Tag", module = "livox_mid360")]
 #[derive(Clone, Copy)]
 pub struct PyTag {
     inner: Tag,
@@ -131,7 +131,7 @@ impl From<Tag> for PyTag {
     }
 }
 
-#[pyclass(frozen, name = "Point")]
+#[pyclass(frozen, name = "Point", module = "livox_mid360")]
 #[derive(Clone, Copy)]
 pub struct PyPoint {
     inner: Point,
@@ -232,7 +232,7 @@ impl From<Point> for PyPoint {
     }
 }
 
-#[pyclass(frozen, name = "ImuSample")]
+#[pyclass(frozen, name = "ImuSample", module = "livox_mid360")]
 #[derive(Clone, Copy)]
 pub struct PyImuSample {
     inner: ImuSample,
@@ -306,7 +306,7 @@ impl From<ImuSample> for PyImuSample {
     }
 }
 
-#[pyclass(frozen, name = "DataFrameHeader")]
+#[pyclass(frozen, name = "DataFrameHeader", module = "livox_mid360")]
 #[derive(Clone, Copy)]
 pub struct PyDataFrameHeader {
     inner: DataFrameHeader,
@@ -402,7 +402,7 @@ impl From<DataFrameHeader> for PyDataFrameHeader {
     }
 }
 
-#[pyclass(frozen, name = "DataPacket")]
+#[pyclass(frozen, name = "DataPacket", module = "livox_mid360")]
 #[derive(Clone)]
 pub struct PyDataPacket {
     inner: DataPacket,
@@ -496,7 +496,7 @@ impl From<DataPacket> for PyDataPacket {
     }
 }
 
-#[pyclass(frozen, name = "Sample")]
+#[pyclass(frozen, name = "Sample", module = "livox_mid360")]
 #[derive(Clone)]
 pub struct PySample {
     inner: Sample,

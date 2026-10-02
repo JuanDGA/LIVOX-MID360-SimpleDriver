@@ -31,6 +31,10 @@ pytest
 The PCA octree tokenizer is wrapped as `encode`. Optional Rust features
 `cloud` and `imu` are not.
 
+The wheel ships `livox_mid360.pyi` and a `py.typed` marker. After install,
+editors and type checkers see the classes, methods, constants, and async
+return types.
+
 ## Usage
 
 I/O methods return asyncio awaitables. Packet parse/build stays synchronous.

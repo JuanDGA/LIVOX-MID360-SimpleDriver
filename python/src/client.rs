@@ -22,7 +22,7 @@ use pyo3_async_runtimes::tokio::future_into_py;
 
 use crate::error::{duration_secs, map_err, parse_ipv4};
 
-#[pyclass(frozen, name = "DiscoveredDevice")]
+#[pyclass(frozen, name = "DiscoveredDevice", module = "livox_mid360")]
 #[derive(Clone)]
 pub struct PyDiscoveredDevice {
     inner: DiscoveredDevice,
