@@ -12,14 +12,21 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
+use numpy::{IntoPyArray, PyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Encode a point cloud into a PCA-octree token vector.
 ///
 /// `cloud` is a sequence of `(x, y, z)` positions in metres. `rounds` is
-/// 1 through 5. The result has `4 * 8**rounds` floats.
+/// 1 through 5. The result is a 1-D `float32` array of `4 * 8**rounds` values.
 #[pyfunction]
-pub fn encode(cloud: Vec<[f32; 3]>, rounds: u8) -> PyResult<Vec<f32>> {
-    livox_rs::encode::encode(&cloud, rounds).map_err(|err| PyValueError::new_err(err.to_string()))
+pub fn encode<'py>(
+    py: Python<'py>,
+    cloud: Vec<[f32; 3]>,
+    rounds: u8,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let tokens = livox_rs::encode::encode(&cloud, rounds)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(tokens.into_pyarray(py))
 }

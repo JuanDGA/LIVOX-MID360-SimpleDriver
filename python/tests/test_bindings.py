@@ -12,6 +12,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
+import numpy as np
 import pytest
 
 import livox_mid360 as mid
@@ -104,7 +105,10 @@ def test_encode_vector_length():
     cloud = [(0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (2.0, 0.0, 1.0)]
     for rounds in range(mid.MIN_ROUNDS, mid.MAX_ROUNDS + 1):
         tokens = mid.encode(cloud, rounds)
-        assert len(tokens) == mid.FLOATS_PER_SEGMENT * 8**rounds
+        assert isinstance(tokens, np.ndarray)
+        assert tokens.dtype == np.float32
+        assert tokens.shape == (mid.FLOATS_PER_SEGMENT * 8**rounds,)
+        assert tokens.flags.c_contiguous
 
 
 def test_encode_from_point_coords():

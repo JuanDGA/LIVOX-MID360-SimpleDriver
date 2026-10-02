@@ -79,8 +79,8 @@ packet = DataPacket.parse(udp_payload)
 ## Encoding a point cloud
 
 `encode(cloud, rounds)` turns `(x, y, z)` positions in metres into a
-fixed-length token vector. `rounds` is 1 through 5 (`MIN_ROUNDS` /
-`MAX_ROUNDS`). The vector has `FLOATS_PER_SEGMENT * 8 ** rounds` floats.
+1-D `float32` NumPy array. `rounds` is 1 through 5 (`MIN_ROUNDS` /
+`MAX_ROUNDS`). The array has `FLOATS_PER_SEGMENT * 8 ** rounds` values.
 
 ```python
 from livox_mid360 import encode, FLOATS_PER_SEGMENT

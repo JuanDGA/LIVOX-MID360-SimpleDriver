@@ -17,6 +17,8 @@
 from collections.abc import Buffer, Sequence
 from typing import Final, Literal
 
+import numpy as np
+
 type _DataTypeArg = (
     DataType
     | int
@@ -295,11 +297,12 @@ class LivoxClient:
 
     def __repr__(self) -> str: ...
 
-def encode(cloud: Sequence[tuple[float, float, float]], rounds: int) -> list[float]:
+def encode(cloud: Sequence[tuple[float, float, float]], rounds: int) -> np.ndarray:
     """Encode a point cloud into a PCA-octree token vector.
 
     ``cloud`` is a sequence of ``(x, y, z)`` positions in metres. ``rounds`` is
-    1 through 5. The result has ``FLOATS_PER_SEGMENT * 8**rounds`` floats.
+    1 through 5. The result is a 1-D ``float32`` array of
+    ``FLOATS_PER_SEGMENT * 8**rounds`` values.
     """
     ...
 
