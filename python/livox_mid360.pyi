@@ -297,6 +297,45 @@ class LivoxClient:
 
     def __repr__(self) -> str: ...
 
+class AttitudeEstimator:
+    """Mahony attitude estimate from gyro (rad/s) and acceleration (g)."""
+
+    def __init__(self) -> None: ...
+    def update(self, gyro: tuple[float, float, float], acc: tuple[float, float, float], ts: int) -> None:
+        """Integrate one IMU sample. ``ts`` is nanoseconds."""
+        ...
+    def __repr__(self) -> str: ...
+
+class OrientationHistory:
+    """Orientations indexed by timestamp. Empty history reports identity."""
+
+    def __init__(self, max_len: int) -> None: ...
+    def push(self, ts: int, estimator: AttitudeEstimator) -> None:
+        """Store the estimator's current orientation at ``ts`` (nanoseconds)."""
+        ...
+    def __repr__(self) -> str: ...
+
+class Cloud:
+    """Rolling point buffer in the lidar_encoder frame.
+
+    Points are rotated by the orientation at the packet timestamp, then stored
+    as ``(x, z, -y)``. Points older than ``max_age_ns`` are dropped.
+    """
+
+    def __init__(self) -> None: ...
+    def add(
+        self,
+        points: Sequence[Point],
+        ts: int,
+        max_age_ns: int,
+        history: OrientationHistory,
+    ) -> None:
+        """Add one packet. ``ts`` and ``max_age_ns`` are nanoseconds."""
+        ...
+    def __len__(self) -> int: ...
+    def positions(self) -> list[list[float]]: ...
+    def __repr__(self) -> str: ...
+
 def encode(cloud: Sequence[tuple[float, float, float]], rounds: int) -> np.ndarray:
     """Encode a point cloud into a PCA-octree token vector.
 
@@ -326,6 +365,9 @@ __all__ = [
     "LidarError",
     "LiveReader",
     "LivoxClient",
+    "AttitudeEstimator",
+    "OrientationHistory",
+    "Cloud",
     "DiscoveredDevice",
     "Sample",
     "DataPacket",

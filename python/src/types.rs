@@ -137,6 +137,12 @@ pub struct PyPoint {
     inner: Point,
 }
 
+impl PyPoint {
+    pub(crate) fn to_point(self) -> Point {
+        self.inner
+    }
+}
+
 #[pymethods]
 impl PyPoint {
     #[staticmethod]

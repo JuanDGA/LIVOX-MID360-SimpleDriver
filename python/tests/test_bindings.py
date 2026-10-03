@@ -125,3 +125,37 @@ def test_encode_rejects_empty_cloud():
 def test_encode_rejects_invalid_rounds():
     with pytest.raises(ValueError, match="rounds"):
         mid.encode([(0.0, 0.0, 0.0)], 0)
+
+
+def test_cloud_identity_orientation_remaps_axes():
+    # No IMU yet: orientation is identity, so (x, y, z) is stored as (x, z, -y).
+    cloud = mid.Cloud()
+    history = mid.OrientationHistory(8)
+    cloud.add([mid.Point.cartesian32(1000, 2000, 3000, 0)], 0, 500_000_000, history)
+    assert cloud.positions() == [[1.0, 3.0, -2.0]]
+
+
+def test_cloud_drops_points_outside_the_window():
+    cloud = mid.Cloud()
+    history = mid.OrientationHistory(8)
+    window_ns = 500_000_000
+    cloud.add([mid.Point.cartesian32(1000, 0, 0, 0)], 0, window_ns, history)
+    cloud.add([mid.Point.cartesian32(0, 1000, 0, 0)], 600_000_000, window_ns, history)
+    assert len(cloud) == 1
+    assert cloud.positions() == [[0.0, 0.0, -1.0]]
+
+
+def test_cloud_keeps_imu_stabilized_points_inside_the_window():
+    estimator = mid.AttitudeEstimator()
+    history = mid.OrientationHistory(8)
+    ts = 0
+    # 200 samples at 200 Hz, yaw rate 1 rad/s, gravity along body Z.
+    for _ in range(200):
+        ts += 5_000_000
+        estimator.update((0.0, 0.0, 1.0), (0.0, 0.0, 1.0), ts)
+        history.push(ts, estimator)
+
+    cloud = mid.Cloud()
+    cloud.add([mid.Point.cartesian32(1000, 0, 0, 0)], ts, 500_000_000, history)
+    # Body +X yawed by about 1 rad, then stored as (x, z, -y).
+    assert cloud.positions()[0] == pytest.approx((0.5403023, 0.0, -0.841471), abs=1e-2)

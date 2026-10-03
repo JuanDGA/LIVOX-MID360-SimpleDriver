@@ -13,6 +13,7 @@
 //    limitations under the License.
 
 mod client;
+mod cloud;
 mod encode;
 mod error;
 mod session;
@@ -21,6 +22,7 @@ mod types;
 use pyo3::prelude::*;
 
 use client::{PyDiscoveredDevice, PyLivoxClient};
+use cloud::{PyAttitudeEstimator, PyCloud, PyOrientationHistory};
 use error::{init_runtime, LidarError};
 use session::PyLiveReader;
 use types::{
@@ -34,6 +36,9 @@ fn livox_mid360(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("LidarError", m.py().get_type::<LidarError>())?;
     m.add_class::<PyLiveReader>()?;
     m.add_class::<PyLivoxClient>()?;
+    m.add_class::<PyAttitudeEstimator>()?;
+    m.add_class::<PyOrientationHistory>()?;
+    m.add_class::<PyCloud>()?;
     m.add_class::<PyDiscoveredDevice>()?;
     m.add_class::<PySample>()?;
     m.add_class::<PyDataPacket>()?;

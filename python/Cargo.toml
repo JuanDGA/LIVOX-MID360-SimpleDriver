@@ -12,7 +12,8 @@ name = "livox_mid360"
 crate-type = ["cdylib"]
 
 [dependencies]
-livox_rs = { path = "..", package = "livox_mid360", features = ["encode"] }
+livox_rs = { path = "..", package = "livox_mid360", features = ["encode", "cloud", "imu"] }
+glam = "0.29"
 numpy = "0.26"
 pyo3 = { version = "0.26", features = ["abi3-py312"] }
 pyo3-async-runtimes = { version = "0.26", features = ["tokio-runtime"] }
